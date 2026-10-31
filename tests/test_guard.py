@@ -290,6 +290,17 @@ class OnInputTests(unittest.TestCase):
         # Assert
         self.assertEqual(decision(result), "deny")
 
+    def test_quoted_text_starting_mid_word_still_trips_blocking_rule(self):
+        # Arrange: the path sits inside --body="...", so it is posted text, not a path argument.
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = os.path.join(tmp, "guard-vault")
+            os.makedirs(vault)
+            event = bash_call(f'gh issue comment 1 --body="notes are in {vault} now"', cwd=tmp)
+            # Act
+            result = guard.on_input(event, rules(warn=[VAULT_BLOCK]))
+        # Assert
+        self.assertEqual(decision(result), "deny")
+
     def test_description_does_not_trip_blocking_rule(self):
         # Arrange
         event = bash_call('gh issue comment 1 --body "Fixed."')

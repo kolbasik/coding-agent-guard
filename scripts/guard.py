@@ -442,9 +442,12 @@ def _is_local_path(token, cwd):
 def sent_text(command, cwd):
     """A command minus the arguments that name local paths: roughly the text it sends."""
     try:
-        tokens = shlex.split(command, posix=False)   # posix=False keeps Windows backslashes
+        shlex.split(command, posix=False)   # only to refuse an unbalanced quote
     except ValueError:
         return command
+    # shlex ignores a quote that opens mid-word (--body="a b"), which would split posted text into
+    # path-like words; a word here is unquoted and quoted runs together, backslashes kept.
+    tokens = re.findall(r"""(?:[^\s"']+|"[^"]*"|'[^']*')+""", command)
     return " ".join(t for t in tokens if not _is_local_path(t, cwd))
 
 
