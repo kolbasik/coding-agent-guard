@@ -440,8 +440,29 @@ on another machine with `--benign-file`.
 - **A local command** is blocked only for a known secret value. Secret shapes
   in a command that does not leave the machine (`echo`, a build) pass.
 
+## Privacy skill
+
+The plugin also ships a `privacy` skill (`coding-agent-guard:privacy` once
+installed) for macOS: which switch turns off each tool's telemetry, surveys,
+update checks and debug logging, how to assess a new tool by watching its
+sockets, and a checker that proves the switches are off.
+
+```sh
+pwsh -NoProfile -File skills/privacy/scripts/Test-Privacy.ps1                 # status, changes nothing
+pwsh -NoProfile -File skills/privacy/scripts/Test-Privacy.ps1 -Action apply   # fix what it can, with backups
+```
+
+It needs PowerShell 7. Each check applies only when its tool is installed, and
+a sweep flags installed tools nobody has assessed. Add your own assessed tools,
+and corporate software that must be left alone, to
+`~/.claude/coding-agent-guard/privacy-known.txt`, one `-like` pattern per line.
+The environment opt-outs live in `skills/privacy/opt-outs.zsh`, for
+`~/.zprofile` to source from the marketplace checkout; the skill's `SKILL.md`
+has the details.
+
 ## Test
 
 ```sh
 python -m unittest discover -s tests
+pwsh -NoProfile -Command "Invoke-Pester skills/privacy"     # Pester 4.10: Install-Module Pester -RequiredVersion 4.10.1
 ```
