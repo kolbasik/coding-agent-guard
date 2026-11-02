@@ -44,6 +44,22 @@ class RedactTests(unittest.TestCase):
         # Assert
         self.assertEqual(kinds, [])
 
+    def test_interpolated_template_literal_is_not_password(self):
+        # Arrange
+        text = "const pass" + 'word = `E2E-${randomBytes(24).toString("base64url")}!`;'
+        # Act
+        _, kinds = leaks.redact(text, [])
+        # Assert
+        self.assertEqual(kinds, [])
+
+    def test_template_literal_without_interpolation_is_password(self):
+        # Arrange
+        text = "const pass" + "word = `Hunter2" + "Hunter2`;"
+        # Act
+        _, kinds = leaks.redact(text, [])
+        # Assert
+        self.assertEqual(kinds, ["password"])
+
     def test_json_password_is_redacted(self):
         # Arrange
         text = '{"password": "hunter22"}'

@@ -27,8 +27,9 @@ SECRET_PATTERNS = [
     ("password", r"(?i)\"(?:password|passwd|client_secret|api_?key|secret|token|access_token|refresh_token)\"\s*:\s*\"(?P<v>[^\"]{6,})\""),
 ]
 GENERIC = ("password", "url-password")
-# ${VAR}, $VAR, %VAR%, <placeholder>, *** masks, or a bare identifier/call with no digit in it.
-PLACEHOLDER = re.compile(r"^(?:[$%<*{]|\[REDACTED)|^[A-Za-z_.-]+(?:\(\))?$")
+# ${VAR}, $VAR, %VAR%, <placeholder>, *** masks, a bare identifier/call with no digit in it,
+# or a JS template literal built at run time (`...${expr}...`).
+PLACEHOLDER = re.compile(r"^(?:[$%<*{]|\[REDACTED)|^[A-Za-z_.-]+(?:\(\))?$|^`[^`]*\$\{")
 
 HETU = re.compile(r"\b(\d{2})(\d{2})(\d{2})[-+A-FU-Y](\d{3})([0-9A-FHJ-NPR-Y])\b")
 HETU_CHECK = "0123456789ABCDEFHJKLMNPRSTUVWXY"
