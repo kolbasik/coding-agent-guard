@@ -45,6 +45,16 @@ JUDGE_PROMPT = (
 
 
 SCREEN = "screen:"
+JUDGE_CHARS = 32_000   # how much of one text a judge reads
+
+
+def judge_window(text, span):
+    """What the judge reads of a text: all of it when it fits, else the part around the classifier's most
+    suspect window, so padding cannot push an injection past what the judge sees."""
+    if len(text) <= JUDGE_CHARS or not span:
+        return text[:JUDGE_CHARS]
+    start = min(max(0, (span[0] + span[1] - JUDGE_CHARS) // 2), len(text) - JUDGE_CHARS)
+    return text[start:start + JUDGE_CHARS]
 
 
 def top(scores, screens=False):
@@ -61,9 +71,11 @@ def claude_command(cli, model):
 
     Thinking off takes a judgement from 6-12 s (hundreds of thinking tokens) to about 1 s.
     --bare and CLAUDE_CODE_SIMPLE would strip more but refuse subscription (OAuth) logins.
+    The cap stops a runaway call, not a big one: at $0.05 outputs from about 15,000 characters failed as
+    budget_exhausted, and an unjudged flag is a flag nobody checked.
     """
     return [*cli, "-p", "--model", model, "--thinking", "disabled", "--tools", "", "--strict-mcp-config",
-            "--setting-sources", "", "--disable-slash-commands", "--no-session-persistence", "--max-budget-usd", "0.05",
+            "--setting-sources", "", "--disable-slash-commands", "--no-session-persistence", "--max-budget-usd", "0.25",
             "--output-format", "json", "--system-prompt", JUDGE_PROMPT]
 
 
@@ -87,7 +99,7 @@ def claude_judge(text, args):
     os.makedirs(args.claude_config, exist_ok=True)
     os.makedirs(args.claude_cwd, exist_ok=True)   # empty, so no project CLAUDE.md is found
     run = subprocess.run(claude_command(args.claude_cmd, args.claude_model), capture_output=True, text=True,
-                         input="<tool_output>\n" + text[:32_000] + "\n</tool_output>",
+                         input="<tool_output>\n" + text[:JUDGE_CHARS] + "\n</tool_output>",
                          cwd=args.claude_cwd, env=env, timeout=args.claude_timeout)
     out = json.loads(run.stdout)
     if out.get("is_error"):
@@ -126,7 +138,7 @@ def codex_judge(text, args):
         json.dump(VERDICT_SCHEMA, f)
     run = subprocess.run(codex_command(args.codex_cmd, args.codex_model, schema_file), capture_output=True,
                          text=True, encoding="utf-8",
-                         input=JUDGE_PROMPT + "\n\n<tool_output>\n" + text[:32_000] + "\n</tool_output>",
+                         input=JUDGE_PROMPT + "\n\n<tool_output>\n" + text[:JUDGE_CHARS] + "\n</tool_output>",
                          cwd=args.codex_cwd, timeout=args.codex_timeout)
     if run.returncode:
         # Only the exit code: Codex echoes the prompt, and so the judged text, on stderr.
@@ -173,7 +185,7 @@ def agy_judge(text, args):
     schema_file = os.path.join(args.agy_dir, "verdict-schema.json")
     with open(schema_file, "w", encoding="utf-8") as f:
         json.dump(VERDICT_SCHEMA, f)
-    prompt = JUDGE_PROMPT + "\n\n<tool_output>\n" + text[:32_000] + "\n</tool_output>"
+    prompt = JUDGE_PROMPT + "\n\n<tool_output>\n" + text[:JUDGE_CHARS] + "\n</tool_output>"
     run = subprocess.run(agy_command(args.agy_cmd, args.agy_model, schema_file, args.agy_timeout),
                          input=json.dumps({"event": "user", "message": {"role": "user", "content": prompt}}) + "\n",
                          capture_output=True, text=True, encoding="utf-8", cwd=workspace,
@@ -221,7 +233,7 @@ def chat_judge(text, args):
 def judge(url, model, text, timeout):
     body = json.dumps({"model": model, "temperature": 0, "messages": [
         {"role": "system", "content": JUDGE_PROMPT},
-        {"role": "user", "content": "<tool_output>\n" + text[:32_000] + "\n</tool_output>"},
+        {"role": "user", "content": "<tool_output>\n" + text[:JUDGE_CHARS] + "\n</tool_output>"},
     ]}).encode()
     req = urllib.request.Request(url.rstrip("/") + "/chat/completions", body, {"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -281,6 +293,8 @@ def build_server(args, models, confirmers=(), screens=()):
             started = time.perf_counter()
             with lock:
                 scores = {m.name: round(m.score(text), 4) for m in models}
+                # Read under the lock: the next request overwrites a classifier's span.
+                span = getattr(max(models, key=lambda m: scores[m.name]), "span", None)
             # A cascade: the classifiers flag alone when sure; when merely suspect, a second opinion
             # can flag too. Text below --confirm-above never pays for it.
             if confirmers and top(scores) >= args.confirm_above:
@@ -300,12 +314,12 @@ def build_server(args, models, confirmers=(), screens=()):
             if judge_model and (
                     top(scores) >= args.claude_above or (screens and top(scores, screens=True) >= args.screen_above)):
                 try:
-                    scores[judge_name] = 1.0 if judge_fn(text, args) else 0.0
+                    scores[judge_name] = 1.0 if judge_fn(judge_window(text, span), args) else 0.0
                 except Exception as e:
                     scores[f"{judge_name}_error"] = f"{type(e).__name__}: {e}"[:120]
             if args.judge_url and top(scores) >= args.judge_above:
                 try:
-                    scores["judge"] = judge(args.judge_url, args.judge_model, text, args.judge_timeout)
+                    scores["judge"] = judge(args.judge_url, args.judge_model, judge_window(text, span), args.judge_timeout)
                 except Exception as e:
                     scores["judge_error"] = type(e).__name__
             self._send(200, {"scores": scores, "ms": round(1e3 * (time.perf_counter() - started))})

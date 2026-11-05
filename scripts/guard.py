@@ -41,6 +41,8 @@ DEFAULTS = {
                       r"glab\s+(?:mr|issue)\s+(?:create|update|note)", r"git\b[^;&|]*\bcommit"],
     "text_tools": [],
     "local_tools": [],
+    # Whole lines a tool adds to its own output (an update banner, a usage hint), left out of injection checks.
+    "trusted_lines": [],
     "secret_patterns": [],
     "secret_env": [],
     "credential_manager_filters": [],
@@ -244,6 +246,7 @@ def build_rules(cfg, known):
         text=_commands(cfg["text_commands"]),
         text_tools=_tools(cfg["text_tools"]),
         local_tools=_tools(cfg["local_tools"]),
+        trusted_lines=re.compile("^(?:" + "|".join(cfg["trusted_lines"]) + ")$", re.M) if cfg["trusted_lines"] else NEVER,
         warn=[SimpleNamespace(
             pattern=re.compile(w["pattern"]),
             message=w.get("message") or f"matches the '{w['name']}' rule",
@@ -285,9 +288,12 @@ def model_hits(text, classifier):
             if isinstance(p, (int, float)) and p >= classifier.threshold and not name.startswith("screen:")]
     # The judge (Claude, a --chat-model, agy, or Codex for a Codex session) read the suspect text itself, so it may
     # annotate a warning but never cancel one.
-    judge = next((k for k in ("codex", "agy", "chat") if k in scores), "claude")
+    judge = next((k for k in ("codex", "agy", "chat") if k in scores or f"{k}_error" in scores), "claude")
     if hits and scores.get(judge) == 0.0:
         hits.append(f"{judge}-judge:ordinary-data")
+    elif hits and f"{judge}_error" in scores:
+        # The judge clears nearly every classifier flag it reads, so an unjudged flag stays a note to the model.
+        hits.append(f"{judge}-judge:unavailable")
     return hits
 
 
@@ -337,7 +343,7 @@ def on_output(event, rules):
 
     def fn(s):
         if external:
-            hits.extend(injection.hits(s))
+            hits.extend(injection.hits(rules.trusted_lines.sub("", s)))
         cleaned, found = leaks.redact(injection.strip_invisible(s), rules.known, rules.patterns)
         kinds.extend(found)
         return cleaned
@@ -348,7 +354,7 @@ def on_output(event, rules):
         # Send the redacted text: the server is local, but a secret still has no reason to travel.
         rules.sample_text = "\n".join(strings(updated))
         rules.call.update(report.fingerprint(rules.sample_text))
-        hits.extend(model_hits(rules.sample_text, rules.classifier))
+        hits.extend(model_hits(rules.trusted_lines.sub("", rules.sample_text), rules.classifier))
     notes = []
     if kinds and agy:
         notes.append(f"coding-agent-guard: withheld this output, it holds {len(kinds)} secret value(s) "
@@ -545,8 +551,35 @@ def context(event):
 def confirmed(finding):
     """Worth interrupting the user for: a blocked or exposed leak, or an injection the models flagged and the judge did not clear."""
     hits = finding.get("injection") or []
-    return bool(finding.get("blocked")) or bool(finding.get("exposed")) or (any(h.startswith("model:") for h in hits)
-                                            and not any(h.endswith("-judge:ordinary-data") for h in hits))
+    return bool(finding.get("blocked")) or bool(finding.get("exposed")) or (
+        any(h.startswith("model:") for h in hits)
+        and not any(h.endswith(("-judge:ordinary-data", "-judge:unavailable")) for h in hits))
+
+
+JUDGE_DOWN_STAMP = os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or "/tmp", "coding-agent-guard-judge-down")
+JUDGE_DOWN_EVERY = 3600   # seconds: one line per outage, not one per flag it could not check
+
+
+def judge_down_notice(finding):
+    """At most one line an hour while the judge fails, in place of the flags it could not check."""
+    judge = next((h[:-len("-judge:unavailable")] for h in finding.get("injection") or []
+                  if h.endswith("-judge:unavailable")), None)
+    if not judge:
+        return None
+    try:
+        if time.time() - os.path.getmtime(JUDGE_DOWN_STAMP) < JUDGE_DOWN_EVERY:
+            return None
+    except OSError:
+        pass   # no stamp yet
+    try:
+        with open(JUDGE_DOWN_STAMP, "w"):
+            pass
+    except OSError:
+        return None   # cannot throttle, so stay quiet rather than repeat on every flag
+    # The judge's own error (a CLI or HTTP message), never the judged text.
+    error = str((finding.get("scores") or {}).get(f"{judge}_error", ""))[:100]
+    return (f"coding-agent-guard: the {judge} judge is failing ({error}); classifier flags reach the model as notes "
+            "but are not shown to you until it works again")
 
 
 def headline(finding):
@@ -584,6 +617,12 @@ def finish(event, rules, cfg, result, hook_ms=None):
         result = {**(result or {}), "systemMessage": message}   # shown to the user, not to Claude
         if record["notified"]:
             report.notify("coding-agent-guard", message)
+    else:
+        notice = judge_down_notice(record)
+        if notice:
+            result = {**(result or {}), "systemMessage": notice}
+            if cfg["notify"] == "desktop":
+                report.notify("coding-agent-guard", notice)
     if hook_ms is not None:
         record["hook_ms"] = hook_ms
     if cfg["log_file"] and (rules.events or rules.call.get("log")):

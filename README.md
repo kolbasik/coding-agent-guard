@@ -148,6 +148,7 @@ are read in that order, and every list extends the built-in one.
 | `text_commands` | Outbound commands whose text a person reads; warn rules apply to them |
 | `text_tools` | The same for non-shell tools, by tool-name regex |
 | `local_tools` | Tool-name regexes whose input stays on this machine, so secret shapes in it are not blocked |
+| `trusted_lines` | Regexes for whole lines a tool adds to its own output, such as an update banner or a usage hint, left out of injection checks; a regex must match the entire line, so keep each one as exact as the line |
 | `secret_patterns` | Extra `{"name", "pattern"}` secret shapes; a group named `v` marks the secret part |
 | `secret_env` | Extra environment variable names whose values are secrets |
 | `credential_manager_filters` | Name filters whose values are secrets, e.g. `"myapp/*"`: Windows Credential Manager target names, or on macOS keychain generic-password service names, read through `/usr/bin/security` (so only items that trust it, such as ones it wrote, are read without a prompt; an ssh session cannot read them) |
@@ -166,6 +167,8 @@ The four `classifier_*` keys, `log_file`, `samples_file` and `notify` replace th
 personal ID, or an injection a model flagged and the Claude judge did not clear.
 It shows a warning line to the user in Claude Code (`systemMessage`) and, with
 `notify: "desktop"`, a Windows toast, macOS notification or `notify-send`.
+A flag the judge could not check because it failed is not confirmed; instead
+the user sees one line an hour saying the judge is failing, with its error.
 `log_file` gets one line per call: every tool output, every outgoing call, and
 anything with a finding (redactions, pattern hits, cleared flags, blocks,
 warnings, an unreachable server), with its time, session, tool, program names,
@@ -296,10 +299,16 @@ same token in the `CODING_AGENT_GUARD_TOKEN` environment variable.
   flags or is unsure of (`--claude-above`, default 0.9; 0.5 lets Claude decide
   Horizon-Labs' unsure band) or that a screen sends: no thinking, tools, settings
   sources, MCP servers, skills or saved session, its own empty config folder and
-  working folder, telemetry and update checks off, $0.05 cap. Its verdict is
+  working folder, telemetry and update checks off, $0.25 cap. It reads up to
+  32,000 characters: all of a shorter text, else the part around the
+  classifier's most suspect window, so padding cannot hide an injection from
+  it. Its verdict is
   added to the note (`model:claude`, or `claude-judge:ordinary-data`) and never
   removes a classifier's 0.9 warning, because the judge read the suspect text;
-  below 0.9 its verdict decides. Over ssh the macOS
+  below 0.9 its verdict decides. When the judge fails (a usage limit, a lost
+  login), the note says `claude-judge:unavailable` and the user is not alerted:
+  the judge clears nearly all of Horizon-Labs' 0.9 flags (353 of 356, live log
+  to 2026-11-05). Over ssh the macOS
   keychain is locked, so log it in with `claude setup-token` and
   `--claude-token-file`; `--bare` and `CLAUDE_CODE_SIMPLE` refuse subscription
   logins. Measured 2026-09-29 on 30 flagged injections and 10 flagged benign

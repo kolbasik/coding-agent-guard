@@ -261,6 +261,51 @@ class ClaudeJudgeTests(unittest.TestCase):
         note = result["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(("model:fake" in note, "claude-judge:ordinary-data" in note), (True, True))
 
+    def test_failing_claude_keeps_the_note_and_marks_the_flag_unjudged(self):
+        # Arrange
+        with Running(claude_cmd=fake_claude()) as s, mock.patch.dict(os.environ, {"FAKE_CLAUDE_EXPECT_TOKEN": "tok-for-test"}):
+            event = web_output("A long enough page body with MARKER_HIGH in it.")
+            # Act
+            result = guard.on_output(event, guard_rules(s.url))
+        # Assert
+        note = result["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(("model:fake" in note, "claude-judge:unavailable" in note), (True, True))
+
+    def test_long_text_is_judged_around_its_most_suspect_window(self):
+        # Arrange
+        text = "x" * 50_000 + " MARKER_HIGH " + "y" * 50_000
+        # Act
+        window = server.judge_window(text, (50_000, 50_013))
+        # Assert
+        self.assertEqual((len(window), "MARKER_HIGH" in window), (server.JUDGE_CHARS, True))
+
+    def test_window_near_the_end_stays_full_length(self):
+        # Arrange
+        text = "x" * 50_000 + " MARKER_HIGH"
+        # Act
+        window = server.judge_window(text, (49_990, 50_012))
+        # Assert
+        self.assertEqual((len(window), window.endswith("MARKER_HIGH")), (server.JUDGE_CHARS, True))
+
+    def test_text_that_fits_is_judged_whole(self):
+        # Arrange
+        text = "short page with MARKER_HIGH"
+        # Act
+        window = server.judge_window(text, (16, 27))
+        # Assert
+        self.assertEqual(window, text)
+
+    def test_server_sends_the_judge_the_flagged_part_of_a_long_text(self):
+        # Arrange
+        seen = []
+        with Running(claude_cmd=fake_claude()) as s, \
+                mock.patch.object(server, "claude_judge", lambda text, args: seen.append(text) or False):
+            s.model.span = (60_000, 60_011)
+            # Act
+            post(s.url, "x" * 60_000 + "MARKER_HIGH" + "y" * 20_000)
+        # Assert
+        self.assertEqual(("MARKER_HIGH" in seen[0], len(seen[0])), (True, server.JUDGE_CHARS))
+
     def test_top_ignores_error_entries(self):
         # Arrange
         scores = {"a": 0.3, "b_error": "ConnectionError"}

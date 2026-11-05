@@ -29,12 +29,16 @@ class Setup:
     def fake_model_hits(self, text, classifier):
         if self.model_says is None:
             return []
-        classifier.scores = {"fake": 0.95, **({"claude": 0.0} if self.model_says == "cleared" else {})}
-        return ["model:fake"] + (["claude-judge:ordinary-data"] if self.model_says == "cleared" else [])
+        judged = {"cleared": ({"claude": 0.0}, ["claude-judge:ordinary-data"]),
+                  "judge-down": ({"claude_error": "RuntimeError: api_error: weekly limit"}, ["claude-judge:unavailable"])}
+        scores, extra = judged.get(self.model_says, ({}, []))
+        classifier.scores = {"fake": 0.95, **scores}
+        return ["model:fake"] + extra
 
     def run_output(self, text, tool="WebFetch", url="https://example.com/page"):
         event = {"tool_name": tool, "tool_input": {"url": url}, "tool_response": text, "session_id": "s1"}
-        with mock.patch.object(guard, "model_hits", self.fake_model_hits), mock.patch.object(report, "notify") as note:
+        with mock.patch.object(guard, "model_hits", self.fake_model_hits), mock.patch.object(report, "notify") as note, \
+                mock.patch.object(guard, "JUDGE_DOWN_STAMP", os.path.join(self.tmp, "judge-down")):
             result = guard.finish(event, self.rules, self.cfg, guard.on_output(event, self.rules))
         return result, note
 
@@ -64,6 +68,25 @@ class FinishTests(unittest.TestCase):
         result, note = s.run_output("A page body long enough to be scored.")
         # Assert
         self.assertEqual((note.call_count, "systemMessage" in (result or {}), s.logged()[0]["confirmed"]), (0, False, False))
+
+    def test_flag_the_judge_could_not_check_tells_the_user_the_judge_is_down(self):
+        # Arrange
+        s = Setup(model_says="judge-down")
+        # Act
+        result, note = s.run_output("A page body long enough to be scored.")
+        # Assert
+        entry = s.logged()[0]
+        self.assertEqual((note.call_count, "claude judge is failing (RuntimeError: api_error: weekly limit)" in
+                          result["systemMessage"], entry["confirmed"], entry["notified"]), (1, True, False, False))
+
+    def test_judge_down_line_shows_once_an_hour(self):
+        # Arrange
+        s = Setup(model_says="judge-down")
+        s.run_output("A page body long enough to be scored.")
+        # Act
+        result, note = s.run_output("Another page body long enough to be scored.")
+        # Assert
+        self.assertEqual((note.call_count, "systemMessage" in (result or {})), (0, False))
 
     def test_pattern_only_hit_is_logged_not_notified(self):
         # Arrange

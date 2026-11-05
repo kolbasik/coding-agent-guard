@@ -72,13 +72,16 @@ class Classifier:
         self.session = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
 
     def score(self, text):
-        """Highest attack probability over the text's windows, 0..1."""
+        """Highest attack probability over the text's windows, 0..1; `span` keeps that window's character range."""
         first = self.tokenizer.encode(text)
-        best = 0.0
+        best, self.span = 0.0, None
         for enc in ([first] + list(first.overflowing))[: self.max_windows]:
             feed = {"input_ids": np.array([enc.ids], dtype=np.int64),
                     "attention_mask": np.array([enc.attention_mask], dtype=np.int64)}
             logits = self.session.run(None, feed)[0][0]
             exp = np.exp(logits - logits.max())
-            best = max(best, float(exp[self.positive] / exp.sum()))
+            p = float(exp[self.positive] / exp.sum())
+            if self.span is None or p > best:
+                chars = [o for o in enc.offsets if o != (0, 0)]   # (0, 0) marks special tokens
+                best, self.span = p, (chars[0][0], chars[-1][1]) if chars else None
         return best

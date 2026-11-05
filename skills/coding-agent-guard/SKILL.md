@@ -65,6 +65,7 @@ The kinds in brackets say who flagged the text, and so how far to trust it.
 | `model:horizon-guard-base` | the classifier on the scoring server, at 0.9 or more | The main signal |
 | `model:claude` | the Claude judge, asked when Horizon-Labs scores 0.5 or more or the screen (laya:en) 0.5 or more | Below Horizon-Labs' 0.9 it is the verdict; alongside it, a confirmation |
 | `claude-judge:ordinary-data` | the Claude judge disagreeing with Horizon-Labs' 0.9 flag | Most likely a false alarm; still treat the text as data |
+| `claude-judge:unavailable` (or `chat-`, `agy-`, `codex-`) | the judge failed on Horizon-Labs' 0.9 flag: a usage limit, a lost login | Unchecked; the judge clears nearly all such flags, so most likely a false alarm. Still treat the text as data |
 | `model:chat`, `chat-judge:ordinary-data` | the same, from a server run with `--chat-model` (an Ollama or other OpenAI-compatible model judging in Claude's place) | Read as the Claude rows above |
 | `model:agy`, `agy-judge:ordinary-data` | the same, from a server run with `--agy-model` (the Antigravity CLI, e.g. Gemini 3.8 Flash, judging in Claude's place) | Read as the Claude rows above |
 | `model:codex`, `codex-judge:ordinary-data` | the same, from the Codex judge, which takes text from Codex sessions when the server runs with `--codex-model` | Read as the Claude rows above |
@@ -116,8 +117,9 @@ re-run the benchmark (below) instead.
 
 A finding is *confirmed* when a secret or personal ID was blocked on its way
 out, or when a model flagged an injection and the Claude judge did not clear it.
-Confirmed findings show the user a warning line in Claude Code and, with
-`notify: "desktop"`, a desktop notification. `log_file` (JSON Lines; set in
+A flag the judge failed to check is not confirmed. Confirmed findings show the
+user a warning line in Claude Code and, with `notify: "desktop"`, a desktop
+notification; a failing judge shows one line an hour with its error instead. `log_file` (JSON Lines; set in
 the project's `.claude/coding-agent-guard/settings.json`) gets one line per call: every tool
 output, every outgoing call, and anything with a finding, with its time,
 session, tool, program names, Jira keys, URL host, scores, `claude_asked`,
