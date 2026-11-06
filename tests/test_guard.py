@@ -1140,6 +1140,16 @@ class TranscriptScrubHookTests(unittest.TestCase):
             entry = json.loads(f.readline())
         self.assertEqual((entry["found"], entry["masked"], GITHUB in self.transcript()), (["github-token"], False, True))
 
+    def test_rows_seen_while_switched_off_are_masked_once_switched_on(self):
+        # Arrange
+        self.settings(transcript_scrub=False)
+        self.run_hook()
+        self.settings(transcript_scrub=True)
+        # Act
+        self.run_hook()
+        # Assert
+        self.assertNotIn(GITHUB, self.transcript())
+
     def test_subagent_stop_scrubs_the_subagent_transcript(self):
         # Arrange
         agent = os.path.join(self.home.name, "agent.jsonl")

@@ -892,9 +892,11 @@ def scrub_transcript(event):
     if not transcript.pending(path, state):   # most turns end here, before any config or keychain read
         return
     cfg = load_config()
+    mask = bool(cfg["transcript_scrub"])
+    if not mask and not transcript.pending(path, state, mask=False):   # switched off: no rows since the last count
+        return
     started = time.perf_counter()
-    found = transcript.scrub(path, state, known_secrets(cfg), build_rules(cfg, []).patterns,
-                             mask=bool(cfg["transcript_scrub"]))
+    found = transcript.scrub(path, state, known_secrets(cfg), build_rules(cfg, []).patterns, mask=mask)
     if found and cfg["log_file"]:
         report.record(_project_path(cfg["log_file"]),
                       {"session": event.get("session_id"), "direction": "transcript", "hook": event.get("hook_event_name"),

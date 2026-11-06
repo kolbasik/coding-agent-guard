@@ -15,6 +15,8 @@ import leaks
 MASK = b"*"
 # Content blocks Claude Code keeps with the API's signature: a changed text can make a resumed session fail.
 SIGNED = ("thinking", "redacted_thinking")
+# Count mode keeps its own offset beside the state file, so rows it only counted are still masked once masking is on.
+COUNTED = ".counted"
 
 
 def offset(state):
@@ -26,9 +28,14 @@ def offset(state):
         return 0
 
 
-def pending(path, state):
-    """The transcript changed size since the last run: there are rows to read."""
-    return os.path.getsize(path) != offset(state)
+def _start(state, mask):
+    """Where the next run reads from: masking where masking stopped, counting where either stopped."""
+    return offset(state) if mask else max(offset(state), offset(state + COUNTED))
+
+
+def pending(path, state, mask=True):
+    """The transcript changed size since the last run in this mode: there are rows to read."""
+    return os.path.getsize(path) != _start(state, mask)
 
 
 def _strings(value, depth=1, signed=False):
@@ -126,7 +133,7 @@ def scrub(path, state, known, patterns, mask=True):
     row is written back only when it still parses as JSON. With mask off the file is opened
     read-only and the counts say what masking would have done.
     """
-    start, size = offset(state), os.path.getsize(path)
+    start, size = _start(state, mask), os.path.getsize(path)
     if start > size:
         start = 0   # rewritten or replaced since the last run
     kinds, rows, skipped, signed = [], 0, 0, 0
@@ -153,7 +160,7 @@ def scrub(path, state, known, patterns, mask=True):
                         f.write(masked)
             pos = stop
     os.makedirs(os.path.dirname(os.path.abspath(state)), exist_ok=True)
-    with open(state, "w", encoding="utf-8") as f:
+    with open(state if mask else state + COUNTED, "w", encoding="utf-8") as f:
         f.write(str(start + end))
     if not kinds:
         return None

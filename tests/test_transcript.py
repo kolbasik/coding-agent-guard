@@ -131,6 +131,24 @@ class TranscriptScrubTests(unittest.TestCase):
         # Assert
         self.assertEqual((found["found"], found["masked"], self.read()), (["github-token"], False, original))
 
+    def test_rows_only_counted_are_masked_once_masking_is_switched_on(self):
+        # Arrange
+        self.write(USER_ROW + hook_row(f"token {GITHUB}"))
+        self.scrub(mask=False)
+        # Act
+        self.scrub()
+        # Assert
+        self.assertNotIn(GITHUB.encode(), self.read())
+
+    def test_count_mode_counts_each_row_once(self):
+        # Arrange
+        self.write(USER_ROW + hook_row(f"token {GITHUB}"))
+        self.scrub(mask=False)
+        # Act
+        found = self.scrub(mask=False)
+        # Assert
+        self.assertIsNone(found)
+
     def test_known_value_with_quotes_is_masked_inside_nested_json(self):
         # Arrange
         self.write(USER_ROW + hook_row(f"value {QUOTED} end"))

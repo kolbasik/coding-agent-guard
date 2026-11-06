@@ -582,7 +582,10 @@ overwritten in place with `*` of the same byte length:
   did not reach are scrubbed when the session is resumed;
 - with `log_file` set, each check that finds something adds one line with the
   kinds and counts, never the values; with `transcript_scrub: false` the guard
-  only does that and leaves the transcript as written.
+  only does that and leaves the transcript as written. It keeps how far it has
+  counted in a second file (`<name>.counted`), so each row is counted once and
+  rows counted while the switch was off are masked at the first check after it
+  is switched back on.
 
 **Cost** on an Apple silicon Mac with uv (2026-11-06, median of 20): 53 ms at
 the end of a turn that wrote 120 KB of rows, 38 ms when nothing new was written
