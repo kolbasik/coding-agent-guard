@@ -1,6 +1,6 @@
 {
   "name": "coding-agent-guard",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Redacts secrets and personal IDs from tool output, flags prompt injection in content from outside, and blocks secrets from leaving the machine.",
   "author": { "name": "kolbasik" },
   "homepage": "https://github.com/kolbasik/coding-agent-guard",
