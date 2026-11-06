@@ -65,7 +65,7 @@ class Running:
 
     def __init__(self, token="", judge_url=None, judge_above=0.0, confirmers=(), confirm_above=0.5,
                  claude_cmd=None, claude_token_file=None, screens=(), screen_above=0.5, claude_above=0.9,
-                 codex_cmd=None, chat_url=None, agy_cmd=None, deciders=(), anonymize=()):
+                 codex_cmd=None, chat_url=None, agy_cmd=None, deciders=(), anonymize=(), ollama_above=0.1):
         self.model = FakeModel()
         self.cwd = tempfile.mkdtemp()
         args = SimpleNamespace(host="127.0.0.1", port=0, judge_url=judge_url, judge_model="fake-judge" if judge_url else None,
@@ -78,7 +78,8 @@ class Running:
                                codex_cwd=os.path.join(self.cwd, "codex-judge", "cwd"),
                                chat_model="gemma-test" if chat_url else None, chat_url=chat_url, chat_timeout=5,
                                agy_model="gemini-test" if agy_cmd else None, agy_cmd=agy_cmd, agy_timeout=30,
-                               agy_dir=os.path.join(self.cwd, "agy-judge"), anonymize=anonymize)
+                               agy_dir=os.path.join(self.cwd, "agy-judge"), anonymize=anonymize,
+                               ollama_above=ollama_above)
         with mock.patch.dict(os.environ, {"CODING_AGENT_GUARD_TOKEN": token}):
             self.server = server.build_server(args, [self.model], confirmers, screens, deciders)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -630,6 +631,43 @@ class DeciderTests(unittest.TestCase):
             reply = post(s.url, "MARKER_DECIDE and MARKER_CLAUDE_YES in a page")
         # Assert
         self.assertEqual((reply["scores"]["fake"], reply["scores"]["claude"]), (0.1, 1.0))
+
+    def test_decider_runs_while_classifier_scores(self):
+        # Arrange
+        started, decider = threading.Event(), FakeDecider()
+        score = decider.score
+        decider.score = lambda text: (started.set(), score(text))[1]
+        with Running(deciders=[decider]) as s:
+            s.model.score = lambda text: 0.95 if started.wait(2) else 0.0
+            # Act
+            reply = post(s.url, "an ordinary page")
+        # Assert
+        self.assertEqual(reply["scores"], {"fake": 0.95, "decider": 0.1})
+
+    def test_decider_low_score_at_ollama_above_goes_to_claude(self):
+        # Arrange
+        with Running(claude_cmd=fake_claude(), deciders=[FakeDecider()], ollama_above=0.1) as s:
+            # Act
+            reply = post(s.url, "an ordinary page")
+        # Assert
+        self.assertEqual(reply["scores"].get("claude"), 0.0)
+
+    def test_decider_below_ollama_above_skips_claude(self):
+        # Arrange
+        with Running(claude_cmd=fake_claude(), deciders=[FakeDecider()], ollama_above=0.5) as s:
+            # Act
+            reply = post(s.url, "an ordinary page")
+        # Assert
+        self.assertNotIn("claude", reply["scores"])
+
+    def test_long_text_decider_reads_judge_window(self):
+        # Arrange
+        decider = FakeDecider()
+        with Running(deciders=[decider]) as s:
+            # Act
+            post(s.url, "x" * (server.JUDGE_CHARS + 500))
+        # Assert
+        self.assertEqual(len(decider.texts[0]), server.JUDGE_CHARS)
 
     def test_decider_down_is_reported_not_fatal(self):
         # Arrange

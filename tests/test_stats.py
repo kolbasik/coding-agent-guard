@@ -100,6 +100,20 @@ class ReportTests(unittest.TestCase):
         text = out.getvalue()
         self.assertEqual(("2026-09-29" in text, "What-if" in text, "Top sources flagged: example.com 3" in text), (True, True, True))
 
+    def test_torn_log_line_is_skipped(self):
+        # Arrange
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "events.jsonl")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"ts": "2026-09-29T10:00:00+02:00", **LOG[0]}) + "\n")
+                f.write('de_asked": false, "confirmed": false}\n')
+                f.write(json.dumps({"ts": "2026-09-29T11:00:00+02:00", **LOG[1]}) + "\n")
+            # Act
+            with contextlib.redirect_stderr(io.StringIO()):
+                rows = list(stats.load(path, 3650))
+        # Assert
+        self.assertEqual(len(rows), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

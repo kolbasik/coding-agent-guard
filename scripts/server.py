@@ -33,6 +33,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import leaks
@@ -248,6 +249,7 @@ def judge(url, model, text, timeout):
 
 def build_server(args, models, confirmers=(), screens=(), deciders=()):
     lock = threading.Lock()   # ponytail: one scoring at a time; per-model sessions if several users share it
+    pool = ThreadPoolExecutor(8)   # decision models' calls, which are network-bound
     token = os.environ.get("CODING_AGENT_GUARD_TOKEN", "")
 
     class Handler(BaseHTTPRequestHandler):
@@ -296,19 +298,32 @@ def build_server(args, models, confirmers=(), screens=(), deciders=()):
                                      "chat": (chat_judge, args.chat_model),
                                      "claude": (claude_judge, args.claude_model)}[judge_name]
             started = time.perf_counter()
+            # An Ollama decision model reads every text and flags like a classifier, so what it finds suspect
+            # also goes to the judge. It reads what a judge would, anonymized: a :cloud model is someone else's.
+            # It is the slowest step, so it runs while the classifiers and screens score; only a text longer than
+            # a judge reads has to wait for the classifier's span to know which part to send.
+            def ask_deciders(window):
+                outside = leaks.anonymize(window, args.anonymize)
+                return {d.name: pool.submit(d.score, outside) for d in deciders}
+            pending = ask_deciders(text) if deciders and len(text) <= JUDGE_CHARS else {}
             with lock:
                 scores = {m.name: round(m.score(text), 4) for m in models}
                 # Read under the lock: the next request overwrites a classifier's span.
                 span = getattr(max(models, key=lambda m: scores[m.name]), "span", None)
-            # An Ollama decision model reads every text and flags like a classifier, so what it finds suspect
-            # also goes to the judge. It reads what a judge would, anonymized: a :cloud model is someone else's.
-            if deciders:
-                outside = leaks.anonymize(judge_window(text, span), args.anonymize)
-                for d in deciders:
-                    try:
-                        scores[d.name] = round(d.score(outside), 4)
-                    except Exception as e:
-                        scores[f"{d.name}_error"] = type(e).__name__
+            if deciders and not pending:
+                pending = ask_deciders(judge_window(text, span))
+            # A screen scores every text but never flags: it only sends suspect text to Claude, which
+            # catches attacks the classifier misses and throws out the screen's many false alarms.
+            for s in screens:
+                try:
+                    scores[SCREEN + s.name] = round(s.score(text), 4)
+                except Exception as e:
+                    scores[f"{SCREEN}{s.name}_error"] = type(e).__name__
+            for name, future in pending.items():
+                try:
+                    scores[name] = round(future.result(), 4)
+                except Exception as e:
+                    scores[f"{name}_error"] = type(e).__name__
             # A cascade: the classifiers flag alone when sure; when merely suspect, a second opinion
             # can flag too. Text below --confirm-above never pays for it.
             if confirmers and top(scores) >= args.confirm_above:
@@ -317,16 +332,10 @@ def build_server(args, models, confirmers=(), screens=(), deciders=()):
                         scores[c.name] = round(c.score(text), 4)
                     except Exception as e:
                         scores[f"{c.name}_error"] = type(e).__name__
-            # A screen scores every text but never flags: it only sends suspect text to Claude, which
-            # catches attacks the classifier misses and throws out the screen's many false alarms.
-            for s in screens:
-                try:
-                    scores[SCREEN + s.name] = round(s.score(text), 4)
-                except Exception as e:
-                    scores[f"{SCREEN}{s.name}_error"] = type(e).__name__
             # The judge takes seconds, so it only weighs in once a classifier or a screen finds the text suspect.
             if judge_model and (
-                    top(scores) >= args.claude_above or (screens and top(scores, screens=True) >= args.screen_above)):
+                    top(scores) >= args.claude_above or (screens and top(scores, screens=True) >= args.screen_above)
+                    or top({n: scores.get(n) for n in pending}) >= args.ollama_above):
                 try:
                     scores[judge_name] = 1.0 if judge_fn(judge_window(text, span), args) else 0.0
                 except Exception as e:
@@ -362,6 +371,9 @@ def main():
                     help="Ollama decision model scored on every text that flags like a classifier, e.g. clef:cloud; "
                          "it reads the text anonymized")
     ap.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    ap.add_argument("--ollama-above", type=float, default=0.1,
+                    help="send text to the judge when an --ollama model scores at least this; clef:cloud measured "
+                         "best at 0.1, where it replaces a laya:en screen")
     ap.add_argument("--anonymize", action="append", default=[], metavar="TERM",
                     help="a company or product name to replace in text sent to --ollama models; repeat for several")
     ap.add_argument("--claude-model", help="ask `claude -p` with this model about flagged text; a full ID such as "
@@ -408,7 +420,8 @@ def main():
     models = [Classifier(d) for d in args.model]
     confirmers = [Ollaya(m, args.ollaya_url, timeout=10, warm=False) for m in args.confirm]
     screens = [Ollaya(m, args.ollaya_url, timeout=10, warm=False) for m in args.screen]
-    deciders = [Ollama(m, args.ollama_url, timeout=10, warm=False) for m in args.ollama]
+    # clef:cloud answers in 0.9 s at p95; a slow cloud must not hold every outside text for long.
+    deciders = [Ollama(m, args.ollama_url, timeout=3, warm=False) for m in args.ollama]
     for c in confirmers + screens + deciders:
         # At login Ollaya may still be starting; score without it rather than not at all.
         try:

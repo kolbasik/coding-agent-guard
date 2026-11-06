@@ -153,7 +153,13 @@ set -- "$REPO/.venv/bin/python" -u "$REPO/scripts/server.py" --model "$REPO/mode
 if [ -n "$CLAUDE_MODEL" ] || [ -n "$CHAT_MODEL" ] || [ -n "$AGY_MODEL" ]; then
     # With a judge: laya:en screens every text and the judge decides everything either model finds
     # suspect (Horizon-Labs 0.5 or more, or laya:en 0.5 or more), the most accurate setup measured.
-    set -- "$@" --screen "$CONFIRM_MODEL" --screen-above 0.5 --claude-above 0.5
+    if [ -n "$OLLAMA_MODEL" ]; then
+        # An --ollama model sending the judge everything it scores 0.1 or more replaces the laya:en screen:
+        # as many catches at half the false alarms, and a third of our own texts sent to the judge (2026-11-06).
+        set -- "$@" --claude-above 0.5
+    else
+        set -- "$@" --screen "$CONFIRM_MODEL" --screen-above 0.5 --claude-above 0.5
+    fi
     if [ -n "$CHAT_MODEL" ]; then
         set -- "$@" --chat-model "$CHAT_MODEL"
     elif [ -n "$AGY_MODEL" ]; then

@@ -24,8 +24,13 @@ def load(path, days):
     with open(path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
-                r = json.loads(line)
-                ts = datetime.datetime.fromisoformat(r["ts"])
+                try:
+                    r = json.loads(line)
+                    ts = datetime.datetime.fromisoformat(r["ts"])
+                except (ValueError, KeyError, TypeError):
+                    # Hooks running at once can tear a line; one torn record must not stop the report.
+                    print("stats: skipped an unreadable log line", file=sys.stderr)
+                    continue
                 if ts >= cutoff:
                     yield ts, r
 

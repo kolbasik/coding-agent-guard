@@ -381,30 +381,36 @@ same token in the `CODING_AGENT_GUARD_TOKEN` environment variable.
   text, and sends roughly 40% of ordinary tickets and notes to Claude.
 - `--ollama clef:cloud` scores every text with a decision model served by Ollama
   0.35+ (`--ollama-url`, default the local Ollama) that flags like a classifier:
-  0.9 or more raises a flag, and with a judge, `--claude-above` sends what it
-  finds suspect to the judge. It reads what a judge would (up to 32,000
+  0.9 or more raises a flag, and with a judge, `--ollama-above` (default 0.1)
+  sends what it finds suspect to the judge. It runs while the classifier scores
+  and gives up after 3 s. It reads what a judge would (up to 32,000
   characters), anonymized first: secrets and personal IDs redacted, e-mail
   addresses, URL hosts, home folders, IPs, issue keys, phone numbers and
   business IDs replaced, and every `--anonymize <term>` (company or product
   names) too. People's names are not replaced, and the rest of the text goes
   wherever the model runs: for a `:cloud` model, Ollama's cloud, which by its
   privacy policy (March 2026) processes cloud prompts transiently and does not
-  train on them. clef (Cloudflare, 27B) adds about 0.4 s to every text (0.9 s
-  p95). Measured 2026-11-06 with Ollama 0.40.15 and the Sonnet 5 judge at
-  `--claude-above 0.5`; our own tickets and notes were anonymized before they
-  went to the cloud (counts: public is deepset + xTRam1, 301 injections and 615
-  benign; AgentInjectionBench 142 and 40; our texts 240 benign):
+  train on them. clef (Cloudflare, 27B) takes about 0.4 s a text (0.9 s p95).
+  Measured 2026-11-06 with Ollama 0.40.15 and the Sonnet 5 judge, Horizon-Labs
+  sending it 0.5 and up; our own tickets and notes were anonymized before they
+  went to the cloud (public is deepset + xTRam1, 301 injections and 615 benign;
+  AgentInjectionBench 142 and 40; our texts 240 benign; "sent" counts every
+  text the judge reads, Horizon-Labs' 0.9 flags included):
 
   | Setup | Caught: public / AgentInjectionBench | False alarms: public / AgentInjectionBench / our texts | Our texts sent to Claude |
   |---|---|---|---|
-  | Horizon-Labs + `--screen laya:en` → Claude | 276 / 112 | 20 / 6 / 7 | 89 |
-  | **same + `--ollama clef:cloud`** | **285 / 141** | **20 / 6 / 7** (3 more sent to Claude, unjudged) | 92 |
+  | Horizon-Labs + `--screen laya:en` (no clef) | 276 / 112 | 20 / 6 / 7 | – |
+  | Horizon-Labs + `--screen laya:en` + clef 0.5 | 285 / 141 | 20 / 6 / 7 | 98 |
+  | Horizon-Labs + clef 0.5 | 263 / 141 | 4 / 6 / 6 | 17 |
+  | Horizon-Labs + clef 0.2 | 278 / 142 | 8 / 6 / 7 | 22 |
+  | **Horizon-Labs + clef 0.1** (what `setup-mac.sh --ollama-model` installs) | **284 / 142** | **10 / 6 / 7** | **36** |
   | `clef:cloud` alone, 0.9 | 127 / 119 | 0 / 0 / 0 | – |
 
-  Claude's extra work is mostly the attacks clef finds: 9 more public texts and
-  29 more AgentInjectionBench texts. Anonymizing cost clef no public catch and 1
-  of 142 AgentInjectionBench catches at 0.5 (none at 0.9). clef's training data
-  is not published, so AgentInjectionBench may flatter it.
+  So clef at 0.1 replaces the laya:en screen: one public catch fewer, one tool
+  output catch more, half the public false alarms, and the judge reads a third
+  as many of our texts. Anonymizing cost clef no public catch and 1 of 142
+  AgentInjectionBench catches at 0.5 (none at 0.9). clef's training data is not
+  published, so AgentInjectionBench may flatter it.
 - `--claude-model claude-sonnet-5` asks a locked-down `claude -p` about text a classifier
   flags or is unsure of (`--claude-above`, default 0.9; 0.5 lets Claude decide
   Horizon-Labs' unsure band) or that a screen sends: no thinking, tools, settings

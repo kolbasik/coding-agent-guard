@@ -101,7 +101,9 @@ With a Claude judge, the scoring server runs Horizon-Labs' ONNX classifier and
 laya:en (through Ollaya, as a screen) on every text from outside, and a
 locked-down `claude -p` (Sonnet 5, thinking off) decides everything either finds
 suspect: Horizon-Labs 0.5 or more, or laya:en 0.5 or more. Horizon-Labs at 0.9
-or more flags on its own. Measured on three held-out attack sets (one of them
+or more flags on its own. With `--ollama-model clef:cloud`, clef takes laya:en's
+place: Claude decides what Horizon-Labs scores 0.5 or more or clef 0.1 or more,
+and clef at 0.9 flags like Horizon-Labs (see below). Measured on three held-out attack sets (one of them
 injections inside tool output) and on the user's own tickets and notes:
 
 - Horizon-Labs is the only classifier that catches most attacks; Prompt Guard 2
@@ -117,12 +119,15 @@ injections inside tool output) and on the user's own tickets and notes:
   slower and catches less; tev1:0.8b scores nearly everything 0.5 to 0.9.
   `server.py --confirm`/`--screen` reach Ollaya only; `--ollama` runs an Ollama
   model on every text as a flagger, at the client's 0.9.
-- clef:cloud (Cloudflare, 27B, on Ollama's cloud, measured 2026-11-06) added
-  to that setup with `--ollama` lifts catches inside tool output from 112 to 141
-  of 142 and on the public sets from 276 to 285 of 301, with no new false alarm
-  on either or on the user's texts at 0.9, for about 0.4 s per text. It reads
-  every text anonymized (`leaks.anonymize`, plus `--anonymize` terms), but
-  people's names and the content still leave the machine.
+- clef:cloud (Cloudflare, 27B, on Ollama's cloud, measured 2026-11-06) as
+  `--ollama` in laya:en's place, sending Claude everything it scores 0.1 or more
+  (`--ollama-above`), catches 142 of 142 injections inside tool output (112
+  before clef) and 284 of 301 on the public sets (276), with half the public
+  false alarms of the laya:en screen and a third of the user's texts sent to
+  Claude. `setup-mac.sh --ollama-model` installs that. It reads every text
+  anonymized (`leaks.anonymize`, plus `--anonymize` terms), but people's names
+  and the content still leave the machine; it runs while Horizon-Labs scores and
+  gives up after 3 s, so an Ollama outage shows as `ollama-clef-cloud_error`.
 - Letting Claude decide what either model finds suspect beats every cascade of
   models alone: the most catches, about the same false alarms. The price is that
   roughly 40–50% of ordinary outside texts wait about 2.5 s for Claude (live log,
