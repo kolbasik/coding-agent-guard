@@ -557,6 +557,9 @@ overwritten in place with `*` of the same byte length:
 
 - the file is never renamed, truncated or reordered, and a row is written back
   only when it still parses as JSON;
+- thinking blocks are left as written, since they carry a signature a resumed
+  session needs; a secret there (only from a pasted prompt, as tool output is
+  redacted first) is counted in the log line;
 - only complete lines are read, so a row still being written waits for the next
   check; Claude Code writes the transcript asynchronously, so the last rows of a
   turn can wait for the next turn or the end of the session;
@@ -577,8 +580,7 @@ The first check of an existing transcript reads all of it, once: 0.6 s for a
 
 Checked in a real `claude -p` session (Claude Code 2.1.319, 2026-11-06): a
 fake token a Read showed was masked in both rows that kept it, and every row
-still parsed. Not tried: Windows, and whether the API accepts a resumed
-session whose earlier thinking text was masked.
+still parsed. Not tried: Windows.
 
 ## Behaviour to know
 

@@ -4,7 +4,8 @@ The transcript keeps every hook's stdout as written. A PostToolUse hook that rep
 tool's output carries the raw output in its own stdout, so a secret redacted before the
 model saw it can still land on disk there, or in a file Read and a pasted prompt.
 scrub() reads the rows written since its last run and overwrites each secret it finds
-with '*' of the same byte length: the file never moves, shrinks or loses a row.
+with '*' of the same byte length: the file never moves, shrinks or loses a row. Thinking
+blocks are signed, so a secret there is counted and left as written.
 """
 import json
 import os
@@ -12,6 +13,8 @@ import os
 import leaks
 
 MASK = b"*"
+# Content blocks Claude Code keeps with the API's signature: a changed text can make a resumed session fail.
+SIGNED = ("thinking", "redacted_thinking")
 
 
 def offset(state):
@@ -28,8 +31,9 @@ def pending(path, state):
     return os.path.getsize(path) != offset(state)
 
 
-def _strings(value, depth=1):
-    """(text, depth) for every string in a JSON value, opening strings that hold JSON (a hook's stdout)."""
+def _strings(value, depth=1, signed=False):
+    """(text, depth, signed) for every string in a JSON value, opening strings that hold JSON (a hook's stdout);
+    signed marks a string inside a thinking block."""
     if isinstance(value, str):
         if value.lstrip()[:1] in ("{", "["):
             try:
@@ -37,15 +41,16 @@ def _strings(value, depth=1):
             except ValueError:
                 inner = None
             if isinstance(inner, (dict, list)):
-                yield from _strings(inner, depth + 1)
+                yield from _strings(inner, depth + 1, signed)
                 return
-        yield value, depth
+        yield value, depth, signed
     elif isinstance(value, list):
         for item in value:
-            yield from _strings(item, depth)
+            yield from _strings(item, depth, signed)
     elif isinstance(value, dict):
+        signed = signed or value.get("type") in SIGNED
         for item in value.values():
-            yield from _strings(item, depth)
+            yield from _strings(item, depth, signed)
 
 
 def secrets(text, known, patterns):
@@ -81,27 +86,37 @@ def _after_backslash(raw, at):
     return run % 2 == 1
 
 
+def _spans(raw, needle):
+    at = raw.find(needle)
+    while at >= 0:
+        yield at, at + len(needle)
+        at = raw.find(needle, at + 1)
+
+
 def mask_line(raw, known, patterns):
-    """(masked line, kinds) for one transcript row; the line comes back as is when nothing is found."""
+    """(masked line, kinds, kinds left in thinking blocks) for one transcript row; the line comes back as is
+    when nothing is found."""
     try:
         row = json.loads(raw)
     except ValueError:
-        return raw, []
-    kinds, values, depth = [], set(), 1
-    for text, level in _strings(row):
+        return raw, [], 0
+    kinds, values, kept, depth, signed_finds = [], set(), [], 1, 0
+    for text, level, signed in _strings(row):
         depth = max(depth, level)
-        for kind, value in secrets(text, known, patterns):
+        found = secrets(text, known, patterns)
+        for kind, value in found:
             kinds.append(kind)
             values.add(value)
+        if found and signed:
+            signed_finds += len(found)
+            kept += [span for form in _forms(text, level) for span in _spans(raw, form)]
     masked = bytearray(raw)
     for value in values:
         for needle in _forms(value, depth):
-            at = raw.find(needle)
-            while at >= 0:
-                if not _after_backslash(raw, at):
-                    masked[at:at + len(needle)] = MASK * len(needle)
-                at = raw.find(needle, at + 1)
-    return bytes(masked), kinds
+            for start, end in _spans(raw, needle):
+                if not _after_backslash(raw, start) and not any(start < e and end > s for s, e in kept):
+                    masked[start:end] = MASK * (end - start)
+    return bytes(masked), kinds, signed_finds
 
 
 def scrub(path, state, known, patterns, mask=True):
@@ -114,7 +129,7 @@ def scrub(path, state, known, patterns, mask=True):
     start, size = offset(state), os.path.getsize(path)
     if start > size:
         start = 0   # rewritten or replaced since the last run
-    kinds, rows, skipped = [], 0, 0
+    kinds, rows, skipped, signed = [], 0, 0, 0
     with open(path, "r+b" if mask else "rb") as f:
         f.seek(start)
         data = f.read(size - start)
@@ -123,8 +138,9 @@ def scrub(path, state, known, patterns, mask=True):
         while pos < end:
             stop = data.index(b"\n", pos) + 1
             line = data[pos:stop]
-            masked, found = mask_line(line, known, patterns)
+            masked, found, in_thinking = mask_line(line, known, patterns)
             kinds += found
+            signed += in_thinking
             if masked != line:
                 try:
                     json.loads(masked)
@@ -141,4 +157,5 @@ def scrub(path, state, known, patterns, mask=True):
         f.write(str(start + end))
     if not kinds:
         return None
-    return {"found": sorted(set(kinds)), "values": len(kinds), "rows": rows, "skipped": skipped, "masked": mask}
+    return {"found": sorted(set(kinds)), "values": len(kinds), "rows": rows, "skipped": skipped,
+            "left_in_thinking": signed, "masked": mask}

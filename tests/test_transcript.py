@@ -140,6 +140,19 @@ class TranscriptScrubTests(unittest.TestCase):
         output = hook_output(self.read().splitlines()[1])
         self.assertEqual((QUOTED in output, output.startswith("value *"), output.endswith("* end")), (False, True, True))
 
+    def test_thinking_block_is_left_as_written_while_text_is_masked(self):
+        # Arrange
+        thinking = {"type": "thinking", "thinking": f"the user pasted {GITHUB}", "signature": "c2lnbmVk"}
+        self.write(row({"type": "assistant", "uuid": "u3", "message": {"role": "assistant", "content": [
+            thinking, {"type": "text", "text": f"token {GITHUB}"}]}}))
+        # Act
+        found = self.scrub()
+        # Assert
+        line = self.read()
+        content = json.loads(line)["message"]["content"]
+        self.assertEqual((row(thinking)[:-1] in line, content[1]["text"], found["left_in_thinking"]),
+                         (True, "token " + "*" * len(GITHUB), 1))
+
 
 if __name__ == "__main__":
     unittest.main()
