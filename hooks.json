@@ -2,13 +2,17 @@
   "coding-agent-guard": {
     "PreToolUse": [
       {
-        "matcher": "run_command|read_url_content|call_mcp_tool|view_file|grep_search",
+        "matcher": "run_command|read_url_content|call_mcp_tool",
         "hooks": [{ "type": "command", "command": "sh ./scripts/run agy-out", "timeout": 20 }]
+      },
+      {
+        "matcher": "view_file|grep_search",
+        "hooks": [{ "type": "command", "command": "sh ./scripts/run agy-read", "timeout": 20 }]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "run_command|read_url_content|search_web|call_mcp_tool",
+        "matcher": "run_command|read_url_content|search_web|call_mcp_tool|grep_search",
         "hooks": [{ "type": "command", "command": "sh ./scripts/run agy-in", "timeout": 60 }]
       }
     ],

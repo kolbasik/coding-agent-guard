@@ -375,8 +375,8 @@ def on_output(event, rules):
     # Antigravity cannot replace it either, but it can withhold the whole output, so a secret never does.
     codex, agy = "turn_id" in event, bool(event.get("agy"))
     rules.classifier.agent = "codex" if codex else "agy" if agy else "claude"
-    # Anything but a shell is web, MCP or API content, even from a tool whose input stays local.
-    external = tool not in SHELLS or bool(rules.external.search(command))
+    # Anything but a shell or a local file search is web, MCP or API content, even from a tool whose input stays local.
+    external = tool not in SHELLS + FILE_TOOLS or bool(rules.external.search(command))
     kinds, hits = [], []
 
     def fn(s):
@@ -516,20 +516,56 @@ def attached_files(tool, data, command, cwd):
     return [t for t in map(read_text, paths) if t]
 
 
+def _glob_names(glob):
+    """The names a glob is checked as: wildcards dropped and filled, so .env* names .env and .env.* names .env.x."""
+    brace = re.search(r"\{([^{}]*)\}", glob)   # shortcut: one {a,b} group per glob, enough for *.{env,pem}
+    alts = [glob[:brace.start()] + p + glob[brace.end():] for p in brace.group(1).split(",")] if brace else [glob]
+    return list(dict.fromkeys(re.sub(r"\*+|\?|\[[^\]]*\]", fill, alt) for alt in alts for fill in ("", "x")))
+
+
 def read_paths(data, cwd):
-    """Paths a Read or Grep call names: its path, and the path joined with each glob, wildcards dropped and filled."""
+    """Paths a Read or Grep call names: its path, and the path joined with each glob."""
     path = data.get("file_path") or data.get("path")
     paths = [path] if isinstance(path, str) and path.strip() else []
     base = paths[0] if paths else cwd
     globs = data.get("glob")
     for glob in globs if isinstance(globs, list) else [globs]:
-        if not isinstance(glob, str) or glob.startswith("!"):   # a "!" glob excludes files
-            continue
-        brace = re.search(r"\{([^{}]*)\}", glob)   # shortcut: one {a,b} group per glob, enough for *.{env,pem}
-        for alt in [glob[:brace.start()] + p + glob[brace.end():] for p in brace.group(1).split(",")] if brace else [glob]:
-            for fill in ("", "x"):   # .env* names .env, .env.* names .env.x
-                paths.append(os.path.join(base, re.sub(r"\*+|\?|\[[^\]]*\]", fill, alt)))
+        if isinstance(glob, str) and not glob.startswith("!"):   # a "!" glob excludes files
+            paths += [os.path.join(base, name) for name in _glob_names(glob)]
     return [to_path(p, cwd) for p in paths]
+
+
+# Programs that print, copy or load the files they are given; Get-Content, gc and type are PowerShell's.
+READERS = {"cat", "head", "tail", "less", "more", "bat", "grep", "rg", "sed", "awk", "cut", "strings", "xxd", "base64",
+           "cp", "source", ".", "get-content", "gc", "type"}
+
+
+def shell_read_paths(command, cwd):
+    """Files the readers in a command line are given: words that are not options, redirection targets or cp's
+    destination, from each command as written (for `. file`) and without its wrappers."""
+    paths = []
+    for segment in (*_split(_strip_heredocs(command)), *command_segments(command)):
+        try:
+            words = shlex.split(segment, posix=False)
+        except ValueError:
+            words = segment.split()
+        program = re.sub(r"\.exe$", "", re.split(r"[\\/]", words[0].strip("\"'"))[-1], flags=re.I).lower() if words else ""
+        if program not in READERS:
+            continue
+        args, written = [], False
+        for word in words[1:]:
+            if written or re.match(r"\d*>|&>", word):   # > file is written, not read
+                written = bool(re.fullmatch(r"\d*>>?|&>>?", word))
+                continue
+            word = word.lstrip("<")   # < file and <file are read
+            if word.startswith("-"):
+                word = word.split("=", 1)[1] if "=" in word else ""   # --file=.env names a file; -n does not
+            if word:
+                args.append(word)
+        if program == "cp":
+            args = args[:-1]
+        paths += [to_path(name, cwd) for arg in args for name in _glob_names(arg)]
+    return paths
 
 
 def credential_kind(path, rules):
@@ -548,6 +584,17 @@ def _deny(reason):
                                    "permissionDecisionReason": reason}}
 
 
+def _refuse_credential_files(paths, rules, what):
+    """A deny naming the kinds of credential file among paths, or None."""
+    kinds = _unique(filter(None, (credential_kind(p, rules) for p in paths)))
+    if not kinds:
+        return None
+    rules.events.append({"direction": "out", "blocked_files": kinds})
+    return _deny(f"coding-agent-guard: blocked, {what} a credential file ({', '.join(kinds)}). Do not read it another "
+                 "way. Ask the user for the specific value or setting you need instead; if the file holds no secrets, "
+                 "the user can list it in allowed_credential_files.")
+
+
 def on_input(event, rules):
     """PreToolUse: deny a credential file read, or when a secret, personal ID or blocking rule hit would leave;
     ask before a command an ask rule names; else an optional note."""
@@ -557,16 +604,14 @@ def on_input(event, rules):
     if tool in FILE_TOOLS:
         # Refused, not redacted: Edit needs a file's exact bytes from Read. Logged only when refused.
         rules.call = {"direction": "out", "outbound": False, "log": False}
-        kinds = _unique(filter(None, (credential_kind(p, rules) for p in read_paths(data, cwd))))
-        if not kinds:
-            return None
-        rules.events.append({"direction": "out", "blocked_files": kinds})
-        return _deny(f"coding-agent-guard: blocked, this would read a credential file ({', '.join(kinds)}). Do not "
-                     "read it another way. Ask the user for the specific value or setting you need instead; if the "
-                     "file holds no secrets, the user can list it in allowed_credential_files.")
+        return _refuse_credential_files(read_paths(data, cwd), rules, "this would read")
     command = data.get("command", "") if tool in SHELLS else ""
     outbound = _leaves_machine(tool, rules) or bool(rules.outbound.search(command))
     rules.call = {"direction": "out", "outbound": outbound, "log": outbound}   # local calls only when they find something
+    # Refused before it runs: Codex and agy cannot redact what the command prints.
+    refused = _refuse_credential_files(shell_read_paths(command, cwd), rules, "this command would read")
+    if refused:
+        return refused
     warnings = []
     files = attached_files(tool, data, command, cwd) if outbound else []
     diffs = git_texts(command, cwd, warnings) if outbound and tool in SHELLS else []
@@ -790,7 +835,7 @@ def agy_reply(mode, raw, result):
     """Antigravity's hook contract: PreToolUse denies, asks or says nothing (`{}` would deny); PostToolUse withholds
     the output by failing with the reason on stderr, or says nothing; every other note waits for PreInvocation."""
     result = result or {}
-    if mode == "agy-out":
+    if mode in ("agy-out", "agy-read"):
         out = result.get("hookSpecificOutput") or {}
         if out.get("permissionDecision") in ("deny", "ask"):
             # "force_ask" prompts even for a command the user always allows, as Claude Code's "ask" does
@@ -808,9 +853,11 @@ def agy_reply(mode, raw, result):
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
-    handler = {"in": on_output, "out": on_input, "agy-in": on_output, "agy-out": on_input}.get(mode)
+    # read and agy-read are out for file reads, which scripts/run answers itself when they cannot name a credential file
+    handler = {"in": on_output, "out": on_input, "read": on_input,
+               "agy-in": on_output, "agy-out": on_input, "agy-read": on_input}.get(mode)
     if handler is None and mode != "agy-warn":
-        sys.stderr.write("usage: guard.py in|out|agy-in|agy-out|agy-warn < hook-event.json\n")
+        sys.stderr.write("usage: guard.py in|out|read|agy-in|agy-out|agy-read|agy-warn < hook-event.json\n")
         sys.exit(1)
     event = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
     if mode == "agy-warn":

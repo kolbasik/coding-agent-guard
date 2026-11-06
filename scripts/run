@@ -8,19 +8,86 @@
 # and on a Mac without Xcode's command-line tools /usr/bin/python3 is a stub that opens an
 # install dialog, which a hook would do on every tool call.
 here=$(dirname "$0")
-for p in "$here/../.venv/Scripts/python.exe" "$here/../.venv/bin/python"; do
-  [ -x "$p" ] && exec "$p" "$here/guard.py" "$@"
-done
-uv=$(command -v uv 2>/dev/null) && exec "$uv" run --no-project --quiet "$here/guard.py" "$@"
-for py in python3 python; do
-  p=$(command -v "$py" 2>/dev/null) || continue
-  case "$p" in
-    *WindowsApps*) continue ;;
-    /usr/bin/python3) xcode-select -p >/dev/null 2>&1 || continue ;;
+
+start() {
+  for p in "$here/../.venv/Scripts/python.exe" "$here/../.venv/bin/python"; do
+    [ -x "$p" ] && exec "$p" "$here/guard.py" "$@"
+  done
+  uv=$(command -v uv 2>/dev/null) && exec "$uv" run --no-project --quiet "$here/guard.py" "$@"
+  for py in python3 python; do
+    p=$(command -v "$py" 2>/dev/null) || continue
+    case "$p" in
+      *WindowsApps*) continue ;;
+      /usr/bin/python3) xcode-select -p >/dev/null 2>&1 || continue ;;
+    esac
+    exec "$p" "$here/guard.py" "$@"
+  done
+  echo "coding-agent-guard: no Python 3 on PATH; this call was not checked" >&2
+  # Antigravity blocks the call, or drops its output, when a hook fails.
+  case "$1" in agy-*) exit 0 ;; esac
+  exit 1
+}
+
+# The value of "$1":"..." (or the first of "$1":["...") in $input, as $v: empty when the key is absent, ? when it
+# has another shape or an escape other than \\, which becomes / (C:\\x is C:/x).
+json_string() {
+  case $input in
+    *"\"$1\":\""*) v=${input#*"\"$1\":\""} ;;
+    *"\"$1\": \""*) v=${input#*"\"$1\": \""} ;;
+    *"\"$1\":[\""*) v=${input#*"\"$1\":[\""} ;;
+    *"\"$1\""*) v='?'; return ;;
+    *) v=; return ;;
   esac
-  exec "$p" "$here/guard.py" "$@"
-done
-echo "coding-agent-guard: no Python 3 on PATH; this call was not checked" >&2
-# Antigravity blocks the call, or drops its output, when a hook fails.
-case "$1" in agy-*) exit 0 ;; esac
-exit 1
+  v=${v%%\"*}
+  while :; do case $v in *'\\'*) v=${v%%'\\'*}/${v#*'\\'} ;; *) break ;; esac; done
+  case $v in *\\*) v='?' ;; esac
+}
+
+# True when a Read or Grep (agy: view_file, grep_search) cannot name a credential file, so it is allowed without
+# starting Python: no settings file adds or allows credential files, the call names one path and no glob, and neither
+# the path nor the folder it really sits in (symlinks resolved) holds a word that every built-in credential file in
+# guard.py has in its path. Keep the words in step with credential_files there; a test checks one path per kind.
+# Anything unsure goes to Python.
+reads_no_credentials() {
+  case $input in *'"glob"'*|*'"Includes"'*) return 1 ;; esac
+  project=${CLAUDE_PROJECT_DIR:-}
+  if [ -z "$project" ]; then   # as guard.py finds it: agy's workspace, else the event's cwd
+    json_string workspacePaths
+    [ -n "$v" ] || json_string cwd
+    [ "$v" = '?' ] && return 1
+    project=$v
+  fi
+  profile=${USERPROFILE:-}   # Python's home on Windows
+  while :; do case $profile in *\\*) profile=${profile%%\\*}/${profile#*\\} ;; *) break ;; esac; done
+  for home in "${HOME:-}" "$profile" "$project"; do
+    settings=$home/.claude/coding-agent-guard/settings.json
+    [ -n "$home" ] && [ -f "$settings" ] || continue
+    while IFS= read -r line || [ -n "$line" ]; do
+      case $line in *credential_files*) return 1 ;; esac
+    done < "$settings"
+  done
+  json_string file_path
+  for key in path AbsolutePath SearchPath; do [ -n "$v" ] || json_string "$key"; done
+  p=$v
+  case $p in
+    '') return 0 ;;   # no path and no glob: guard.py checks nothing either
+    '?'|'~'*) return 1 ;;
+    /*|[A-Za-z]:/*) ;;
+    *) json_string cwd; case $v in ''|'?'|'~'*) return 1 ;; esac; p=$v/$p ;;
+  esac
+  [ -L "$p" ] && return 1
+  real=$(cd -P "${p%/*}/" 2>/dev/null && pwd -P) || return 1
+  case $(printf '%s\n%s' "$p" "$real" | tr '[:upper:]' '[:lower:]') in
+    *.env*|*credentials*|*cache*|*hosts.yml*|*netrc*|*.pem*|*.p12*|*.pfx*|*id_*|*auth.json*|*oauth_creds*|\
+    *.docker*|*.kube*|*pypirc*|*pgpass*|*gcloud*) return 1 ;;
+  esac
+}
+
+case "$1" in
+  read|agy-read)
+    input=$(cat)
+    reads_no_credentials && exit 0
+    printf '%s' "$input" | start "$@"
+    exit ;;
+esac
+start "$@"

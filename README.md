@@ -2,19 +2,19 @@
 
 A plugin for Claude Code, Codex and Antigravity that checks what reaches the
 coding agent from outside and what the agent sends out. Codex gets all of it
-except output redaction and the credential-file check, and its ask rules block
-(see [Codex](#codex)); Antigravity withholds output that holds a secret instead
-of redacting it (see [Antigravity](#antigravity)).
+except output redaction, and its ask rules block (see [Codex](#codex));
+Antigravity withholds output that holds a secret instead of redacting it (see
+[Antigravity](#antigravity)).
 
 | When | Checks | On a hit |
 |---|---|---|
-| After a shell, web or MCP tool runs | Secrets and personal IDs | Redacted before Claude sees the output; the transcript keeps the redacted copy only |
+| After a shell, Grep, web or MCP tool runs | Secrets and personal IDs | Redacted before Claude sees the output; the transcript keeps the redacted copy only |
 | | Invisible Unicode (zero-width, bidi, tag characters) | Removed |
 | | Instruction-like text in output from outside | A note tells Claude it is data |
 | Before a call that leaves the machine | Secrets and personal IDs in the call, the files it uploads, the staged diff of a commit, the commits of a push | Blocked, with the kind named and the value never repeated |
 | | Instruction-like text and your warn rules in text a person will read | A note, or a block for a rule with `"block": true` |
 | | Your ask rules on a shell command line | The user is asked before it runs |
-| Before Read or Grep opens a file | Credential files: `.env`, cloud and CLI logins, private keys | Refused, with the kind of file named |
+| Before Read, Grep or a shell command such as `cat` opens a file | Credential files: `.env`, cloud and CLI logins, private keys | Refused, with the kind of file named |
 
 It never checks your own prompts.
 
@@ -35,7 +35,12 @@ It never checks your own prompts.
   `id_dsa`; not `.pub`), coding-agent logins (Claude Code's
   `.credentials.json`, Codex's `auth.json`, Gemini's `oauth_creds.json`),
   Docker's `config.json`, `~/.kube/config`, `.pypirc`, `.pgpass` and gcloud's
-  credential files. A symlink to one counts as the file itself.
+  credential files. A symlink to one counts as the file itself. Shell commands
+  that read one are refused too: `cat`, `head`, `tail`, `less`, `more`, `bat`,
+  `grep`, `rg`, `sed`, `awk`, `cut`, `strings`, `xxd`, `base64`, `cp` (its
+  source, not its destination), `source` or `.`, and PowerShell's
+  `Get-Content`, `gc` and `type`. `ls`, `stat` or `test -f` on one is not, nor
+  is `cp .env.example .env`.
 - **Injection:** "ignore previous instructions" and variants, fake role tags
   and lines, "don't tell the user", requests to send credentials somewhere,
   hidden tag characters.
@@ -97,7 +102,7 @@ To run it without installing, clone it
 `scripts/guard.py in` as a `PostToolUse` hook and `scripts/guard.py out` as a
 `PreToolUse` hook, with the matchers from `hooks/hooks.json`.
 
-**Speed.** The hook starts a Python process on every tool call, so the
+**Speed.** The hook starts a Python process on nearly every tool call it checks, so the
 interpreter matters more than the code. On Windows ARM64 the `python` on `PATH`
 is often the x64 build running under emulation. Measured per local call on one
 machine (2026-09-29): 130–146 ms with it, 61 ms with a venv on the native
@@ -125,8 +130,8 @@ instruction-like text gets a note. Codex sets no `CLAUDE_PROJECT_DIR`, so the
 project settings are found from the session's working folder.
 
 Codex has no file-reading tool of its own: it reads files through the shell,
-so a credential file read with `cat` is not refused, and its secrets reach the
-model with the note above. Codex treats a hook's "ask" as a failed hook and
+so the guard refuses a shell command that reads a credential file (`cat .env`,
+`source .env`) before it runs, as on every host. Codex treats a hook's "ask" as a failed hook and
 runs the call, so an [ask rule](#ask-before-a-command) blocks under Codex
 instead, with the same reason; the user runs the command themselves.
 
@@ -146,9 +151,11 @@ it, so under `agy` the guard does what they allow (measured with agy 1.3.3 on
   sees the reason. MCP calls are checked as `mcp__<server>__<tool>`, so the
   same `text_tools` and `local_tools` patterns apply.
 - Added later and not yet tried in a live agy session: `view_file` and
-  `grep_search` refuse credential files as Read and Grep do, and an ask rule
-  answers `force_ask`, which agy's own hook documentation (agy 1.4.7) says
-  prompts even for a command the user chose to always allow.
+  `grep_search` refuse credential files as Read and Grep do; `grep_search`
+  output holding a secret is withheld whole, as command output is (agy 1.4.7
+  saves it as a step file the hook reads); and an ask rule answers
+  `force_ask`, which agy's own hook documentation (agy 1.4.7) says prompts even
+  for a command the user chose to always allow.
 - agy blocks a call, or drops its output, when a hook fails or times out, so
   under agy the guard lets the call through on an internal error.
 
@@ -503,11 +510,17 @@ on another machine with `--benign-file`.
   and not a commit's code, so a rule never trips on an upload path or a diff.
 - **Read is not redacted**, so Claude can still get a file's exact bytes to
   edit it. Credential files are refused instead, before they are opened, and
-  so is Grep when its path or glob names one. A Grep over a whole folder is
-  not refused, and its output is not redacted.
+  so is Grep when its path or glob names one. Grep's output is redacted like a
+  command's, since edits take Read's bytes; a Grep over a whole folder is not
+  refused, but what it prints is redacted.
 - **Cost:** about 200 ms per checked call when Python is started directly,
-  plus about 100 ms for the `sh` launcher the plugin uses. Read and Grep calls
-  start it too.
+  plus about 100 ms for the `sh` launcher the plugin uses. A Read or Grep
+  that cannot name a credential file is answered by the launcher without
+  starting Python: its path and the folder it really sits in hold none of the
+  words built-in credential files have in their paths, and no settings file
+  sets `credential_files` or `allowed_credential_files`; anything unsure goes
+  to Python. Median of 20 Read calls on an Apple silicon Mac with uv
+  (2026-11-06): 14 ms answered by the launcher, against 40 ms through Python.
 - **Commands count where they run, not where they are mentioned**: after `;`,
   `&&`, `|` or inside `$( )`, behind `rtk`, `sudo`, `env`, `timeout` or `VAR=x`,
   as a path or through PowerShell's `&`, and inside `bash -c` or `pwsh -Command`.

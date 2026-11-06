@@ -112,11 +112,12 @@ Do this after the hooks have loaded (step 2).
    `coding-agent-guard: withheld this output, it holds 1 secret value(s)
    (github-token)`. agy still shows the raw output in its own terminal. Tell
    the user about this limit.
-3. **Credential file** (Claude Code and Antigravity). Read a file named
-   `.env` in the current folder; it need not exist, since the guard refuses
-   before the file is opened. Expected: the call is denied with a reason that
-   starts with `coding-agent-guard: blocked, this would read a credential file
-   (dotenv)`. Codex has no file-reading tool, so skip this under Codex.
+3. **Credential file.** Read a file named `.env` in the current folder; it
+   need not exist, since the guard refuses before the file is opened. Expected:
+   the call is denied with a reason that starts with `coding-agent-guard:
+   blocked, this would read a credential file (dotenv)`. Codex has no
+   file-reading tool, so under Codex run `cat .env` instead; its reason says
+   `this command would read a credential file (dotenv)`.
 4. If none of the checks shows the guard, look for `coding-agent-guard:` lines on
    stderr. `no Python 3 on PATH` means step 1.3 is not done. Report anything
    else to the user word for word.

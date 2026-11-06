@@ -16,13 +16,14 @@ recover the value: no re-running with other flags, encodings, `cut` or `od`.
 If a task needs the secret, a script reads it from its store; it never passes
 through the conversation.
 
-Redaction covers shell, web and MCP output, not the Read tool. When a redacted
+Redaction covers shell, Grep, web and MCP output, not the Read tool. When a redacted
 line has to be edited, Read the file for its exact bytes.
 
-## "coding-agent-guard: blocked, this would read a credential file ..."
+## "coding-agent-guard: blocked, ... would read a credential file ..."
 
-Read or Grep was about to open a file that holds logins or keys (`.env`, cloud
-and CLI logins, private keys); the kind is in brackets. Do not read it another
+Read, Grep or a shell command (`cat`, `grep`, `source`, `cp` ...) was about to
+open a file that holds logins or keys (`.env`, cloud and CLI logins, private
+keys); the kind is in brackets. Do not read it another
 way (`cat`, `grep`, a script). Ask the user for the specific value or setting
 the task needs. If the file holds no secrets, the user can add its path to
 `allowed_credential_files`.

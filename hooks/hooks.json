@@ -3,15 +3,21 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|PowerShell|WebFetch|Artifact|Read|Grep|mcp__.*",
+        "matcher": "Bash|PowerShell|WebFetch|Artifact|mcp__.*",
         "hooks": [
           { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" out", "timeout": 20 }
+        ]
+      },
+      {
+        "matcher": "Read|Grep",
+        "hooks": [
+          { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" read", "timeout": 20 }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|PowerShell|WebFetch|WebSearch|mcp__.*",
+        "matcher": "Bash|PowerShell|WebFetch|WebSearch|Grep|mcp__.*",
         "hooks": [
           { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" in", "timeout": 60 }
         ]
