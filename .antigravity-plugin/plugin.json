@@ -1,5 +1,5 @@
 {
   "name": "coding-agent-guard",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Withholds tool output that holds a secret, flags prompt injection in content from outside, and blocks secrets from leaving the machine."
 }
