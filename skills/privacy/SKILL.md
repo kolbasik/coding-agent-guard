@@ -128,7 +128,7 @@ it is always a `manual` line while the app is installed.
 
 ## 8. No off switch exists
 
-Update checks in `twg`, `agy`, Orca, Ollama, context-mode and the Herdr app
+Update checks in `twg`, `agy`, Orca, Ollama and the Herdr app
 (hourly, app and herdr-core); SourceGit's Gravatar lookups (an MD5 of each
 commit email); uv's platform user agent.
 
