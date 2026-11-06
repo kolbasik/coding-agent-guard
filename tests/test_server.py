@@ -65,7 +65,7 @@ class Running:
 
     def __init__(self, token="", judge_url=None, judge_above=0.0, confirmers=(), confirm_above=0.5,
                  claude_cmd=None, claude_token_file=None, screens=(), screen_above=0.5, claude_above=0.9,
-                 codex_cmd=None, chat_url=None, agy_cmd=None):
+                 codex_cmd=None, chat_url=None, agy_cmd=None, deciders=(), anonymize=()):
         self.model = FakeModel()
         self.cwd = tempfile.mkdtemp()
         args = SimpleNamespace(host="127.0.0.1", port=0, judge_url=judge_url, judge_model="fake-judge" if judge_url else None,
@@ -78,9 +78,9 @@ class Running:
                                codex_cwd=os.path.join(self.cwd, "codex-judge", "cwd"),
                                chat_model="gemma-test" if chat_url else None, chat_url=chat_url, chat_timeout=5,
                                agy_model="gemini-test" if agy_cmd else None, agy_cmd=agy_cmd, agy_timeout=30,
-                               agy_dir=os.path.join(self.cwd, "agy-judge"))
+                               agy_dir=os.path.join(self.cwd, "agy-judge"), anonymize=anonymize)
         with mock.patch.dict(os.environ, {"CODING_AGENT_GUARD_TOKEN": token}):
-            self.server = server.build_server(args, [self.model], confirmers, screens)
+            self.server = server.build_server(args, [self.model], confirmers, screens, deciders)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
 
     def __enter__(self):
@@ -581,6 +581,63 @@ class ScreenTests(unittest.TestCase):
         result = (server.top(scores), server.top(scores, screens=True))
         # Assert
         self.assertEqual(result, (0.3, 0.97))
+
+
+class FakeDecider:
+    name = "decider"
+
+    def __init__(self, fail=False):
+        self.texts, self.fail = [], fail
+
+    def score(self, text):
+        self.texts.append(text)
+        if self.fail:
+            raise ConnectionError("down")
+        return 0.95 if "MARKER_DECIDE" in text else 0.1
+
+
+class DeciderTests(unittest.TestCase):
+    def test_decider_scores_every_text(self):
+        # Arrange
+        with Running(deciders=[FakeDecider()]) as s:
+            # Act
+            reply = post(s.url, "an ordinary page")
+        # Assert
+        self.assertEqual(reply["scores"], {"fake": 0.1, "decider": 0.1})
+
+    def test_decider_reads_anonymized_text(self):
+        # Arrange
+        decider = FakeDecider()
+        with Running(deciders=[decider], anonymize=["Acme"]) as s:
+            # Act
+            post(s.url, "Mail bob@acme.example about ACME-12 in the Acme portal at https://intra.acme.example/x")
+        # Assert
+        self.assertEqual(decider.texts, ["Mail user@example.com about KEY-12 in the [NAME] portal at https://example.com/x"])
+
+    def test_decider_hit_flags_in_guard(self):
+        # Arrange
+        with Running(deciders=[FakeDecider()]) as s:
+            event = web_output("A long enough page body where only MARKER_DECIDE fires.")
+            # Act
+            result = guard.on_output(event, guard_rules(s.url))
+        # Assert
+        self.assertIn("model:decider", result["hookSpecificOutput"]["additionalContext"])
+
+    def test_decider_hit_sends_text_to_claude(self):
+        # Arrange
+        with Running(claude_cmd=fake_claude(), deciders=[FakeDecider()], claude_above=0.5) as s:
+            # Act
+            reply = post(s.url, "MARKER_DECIDE and MARKER_CLAUDE_YES in a page")
+        # Assert
+        self.assertEqual((reply["scores"]["fake"], reply["scores"]["claude"]), (0.1, 1.0))
+
+    def test_decider_down_is_reported_not_fatal(self):
+        # Arrange
+        with Running(deciders=[FakeDecider(fail=True)]) as s:
+            # Act
+            reply = post(s.url, "an ordinary page")
+        # Assert
+        self.assertEqual(reply["scores"], {"fake": 0.1, "decider_error": "ConnectionError"})
 
 
 class JudgeTests(unittest.TestCase):

@@ -87,6 +87,7 @@ The kinds in brackets say who flagged the text, and so how far to trust it.
 | `model:agy`, `agy-judge:ordinary-data` | the same, from a server run with `--agy-model` (the Antigravity CLI, e.g. Gemini 3.8 Flash, judging in Claude's place) | Read as the Claude rows above |
 | `model:codex`, `codex-judge:ordinary-data` | the same, from the Codex judge, which takes text from Codex sessions when the server runs with `--codex-model` | Read as the Claude rows above |
 | `model:ollaya-laya-en` | laya:en as a confirmer, only on servers run without a Claude judge | Real when Horizon-Labs was unsure; alone it flags ordinary tickets |
+| `model:ollama-clef-cloud` (any `model:ollama-…`) | an Ollama decision model the server runs with `--ollama` on every text, anonymized, at 0.9 or more | Read as Horizon-Labs: a main signal, and the judge's verdict beside it decides |
 
 A screen's score never appears as a flag; the findings log keeps it as
 `screen:ollaya-laya-en`. Models flagging with Claude agreeing is a real
@@ -113,8 +114,14 @@ injections inside tool output) and on the user's own tickets and notes:
   Claude instead of 40%, but it catches 7 points fewer inside tool output, takes
   about 0.4 s per text and refuses anything over 2,050 tokens. nimble:9b is
   slower and catches less; tev1:0.8b scores nearly everything 0.5 to 0.9.
-  Only the benchmark can run it: `server.py --confirm`/`--screen` reach Ollaya
-  only, and a confirmer flags at the client's 0.9.
+  `server.py --confirm`/`--screen` reach Ollaya only; `--ollama` runs an Ollama
+  model on every text as a flagger, at the client's 0.9.
+- clef:cloud (Cloudflare, 27B, on Ollama's cloud, measured 2026-11-06) added
+  to that setup with `--ollama` lifts catches inside tool output from 112 to 141
+  of 142 and on the public sets from 276 to 285 of 301, with no new false alarm
+  on either or on the user's texts at 0.9, for about 0.4 s per text. It reads
+  every text anonymized (`leaks.anonymize`, plus `--anonymize` terms), but
+  people's names and the content still leave the machine.
 - Letting Claude decide what either model finds suspect beats every cascade of
   models alone: the most catches, about the same false alarms. The price is that
   roughly 40–50% of ordinary outside texts wait about 2.5 s for Claude (live log,

@@ -7,6 +7,7 @@
 #
 #   sh setup-mac.sh [--host 127.0.0.1] [--port 8765] [--claude-model claude-sonnet-5] [--claude-token-file PATH]
 #                   [--chat-model MODEL] [--agy-model MODEL] [--codex-model MODEL]
+#                   [--ollama-model MODEL [--anonymize TERM ...]]
 #
 #   --host               address the server listens on; the one clients reach (a VM on this
 #                        Mac reaches the Parallels bridge, e.g. 10.211.55.2)
@@ -18,6 +19,9 @@
 #                        gemini-3.8-flash-low; needs the agy CLI on your login PATH, signed in
 #   --codex-model        judge text from Codex sessions with a locked-down `codex exec` instead; needs the
 #                        codex CLI on your login PATH, logged in
+#   --ollama-model       also score every text with this Ollama decision model, e.g. clef:cloud; it flags like a
+#                        classifier and reads the text anonymized; needs Ollama on 127.0.0.1:11434
+#   --anonymize          a company or product name to replace in text sent to --ollama-model; repeat for several
 #
 # Everything stays in this repo copy except the two LaunchAgents and Ollaya's model store.
 set -eu
@@ -27,7 +31,7 @@ OLLAYA_SHA256=7c7d79cae9256d79aa93111f28d2ad24f124c3d730c6786d27694fcef143a437  
 OLLAYA_MLX_SHA256=cba9a87db03b47bb58964af320e4a2c7ee6b8bc1521aec51f44f7db93ddda6da  # ollaya-darwin-arm64-mlx.tgz
 CONFIRM_MODEL=laya:en
 
-HOST=127.0.0.1 PORT=8765 CLAUDE_MODEL="" TOKEN_FILE="" CODEX_MODEL="" CHAT_MODEL="" AGY_MODEL=""
+HOST=127.0.0.1 PORT=8765 CLAUDE_MODEL="" TOKEN_FILE="" CODEX_MODEL="" CHAT_MODEL="" AGY_MODEL="" OLLAMA_MODEL="" ANONYMIZE=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --host) HOST=$2; shift 2 ;;
@@ -37,7 +41,10 @@ while [ $# -gt 0 ]; do
         --chat-model) CHAT_MODEL=$2; shift 2 ;;
         --agy-model) AGY_MODEL=$2; shift 2 ;;
         --codex-model) CODEX_MODEL=$2; shift 2 ;;
-        -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+        --ollama-model) OLLAMA_MODEL=$2; shift 2 ;;
+        --anonymize) ANONYMIZE="$ANONYMIZE$2
+"; shift 2 ;;
+        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
         *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
     esac
 done
@@ -167,6 +174,13 @@ if [ -n "$CODEX_MODEL" ]; then
     CODEX=$(zsh -lc 'command -v codex' 2>/dev/null | tail -1 || true)
     [ -n "$CODEX" ] || { echo "--codex-model needs the codex CLI on your login PATH" >&2; exit 1; }
     set -- "$@" --codex-model "$CODEX_MODEL" --codex-bin "$CODEX"
+fi
+if [ -n "$OLLAMA_MODEL" ]; then
+    set -- "$@" --ollama "$OLLAMA_MODEL"
+    old_ifs=$IFS; IFS='
+'; set -f   # one term per line, never globbed
+    for term in $ANONYMIZE; do set -- "$@" --anonymize "$term"; done
+    IFS=$old_ifs; set +f
 fi
 agent dev.coding-agent-guard.server server "$@"
 

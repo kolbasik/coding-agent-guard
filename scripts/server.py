@@ -1,7 +1,7 @@
 """Injection-scoring server: keeps classifiers loaded so each hook call costs milliseconds, not a model load.
 
   python server.py --model DIR [--model DIR ...] [--host 127.0.0.1] [--port 8765]
-                   [--confirm OLLAYA_MODEL ...] [--claude-model claude-sonnet-5 --claude-bin PATH]
+                   [--confirm OLLAYA_MODEL ...] [--ollama clef:cloud [--anonymize TERM ...]] [--claude-model claude-sonnet-5 --claude-bin PATH]
                    [--codex-model MODEL --codex-bin PATH] [--chat-model MODEL --chat-url URL]
                    [--agy-model gemini-3.8-flash-low --agy-bin PATH]
                    [--judge-url http://127.0.0.1:11434/v1 --judge-model NAME]
@@ -19,7 +19,9 @@ session) only about text a classifier already flags; its yes/no is the score "cl
 (score "codex"); without it, Codex sessions are judged by Claude too. --chat-model takes
 Claude's place with any model behind an OpenAI-compatible endpoint, such as gemma4:cloud
 on Ollama (score "chat"). --agy-model takes Claude's place with a locked-down Antigravity
-CLI (`agy`) run, such as gemini-3.8-flash-low (score "agy").
+CLI (`agy`) run, such as gemini-3.8-flash-low (score "agy"). --ollama scores every text with a
+decision model on Ollama, such as clef:cloud, that flags like a classifier; it reads the text anonymized
+(leaks.anonymize), since a :cloud model runs off this machine.
 """
 import argparse
 import hmac
@@ -32,6 +34,8 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import leaks
 
 MAX_BODY = 2 * 1024 * 1024
 JUDGE_PROMPT = (
@@ -242,7 +246,7 @@ def judge(url, model, text, timeout):
     return 1.0 if json.loads(reply[start:end + 1]).get("injection") else 0.0
 
 
-def build_server(args, models, confirmers=(), screens=()):
+def build_server(args, models, confirmers=(), screens=(), deciders=()):
     lock = threading.Lock()   # ponytail: one scoring at a time; per-model sessions if several users share it
     token = os.environ.get("CODING_AGENT_GUARD_TOKEN", "")
 
@@ -263,7 +267,8 @@ def build_server(args, models, confirmers=(), screens=()):
             if self.path != "/health":
                 return self._send(404, {"error": "not found"})
             self._send(200, {"models": [m.name for m in models], "confirm": [c.name for c in confirmers],
-                             "screen": [s.name for s in screens], "claude": args.claude_model,
+                             "screen": [s.name for s in screens], "ollama": [d.name for d in deciders],
+                             "claude": args.claude_model,
                              "codex": args.codex_model, "chat": args.chat_model, "agy": args.agy_model,
                              "judge": args.judge_model})
 
@@ -295,6 +300,15 @@ def build_server(args, models, confirmers=(), screens=()):
                 scores = {m.name: round(m.score(text), 4) for m in models}
                 # Read under the lock: the next request overwrites a classifier's span.
                 span = getattr(max(models, key=lambda m: scores[m.name]), "span", None)
+            # An Ollama decision model reads every text and flags like a classifier, so what it finds suspect
+            # also goes to the judge. It reads what a judge would, anonymized: a :cloud model is someone else's.
+            if deciders:
+                outside = leaks.anonymize(judge_window(text, span), args.anonymize)
+                for d in deciders:
+                    try:
+                        scores[d.name] = round(d.score(outside), 4)
+                    except Exception as e:
+                        scores[f"{d.name}_error"] = type(e).__name__
             # A cascade: the classifiers flag alone when sure; when merely suspect, a second opinion
             # can flag too. Text below --confirm-above never pays for it.
             if confirmers and top(scores) >= args.confirm_above:
@@ -344,6 +358,12 @@ def main():
                          "the text to the Claude judge, e.g. laya:en")
     ap.add_argument("--screen-above", type=float, default=0.5)
     ap.add_argument("--ollaya-url", default="http://127.0.0.1:11435")
+    ap.add_argument("--ollama", action="append", default=[],
+                    help="Ollama decision model scored on every text that flags like a classifier, e.g. clef:cloud; "
+                         "it reads the text anonymized")
+    ap.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    ap.add_argument("--anonymize", action="append", default=[], metavar="TERM",
+                    help="a company or product name to replace in text sent to --ollama models; repeat for several")
     ap.add_argument("--claude-model", help="ask `claude -p` with this model about flagged text; a full ID such as "
                          "claude-sonnet-5, since the CLI's aliases move when it updates")
     ap.add_argument("--claude-above", type=float, default=0.9,
@@ -384,18 +404,20 @@ def main():
     args.codex_cwd = os.path.join(cache, "codex-judge", "cwd")
     args.agy_dir = os.path.join(cache, "agy-judge")
     from classifier import Classifier   # onnxruntime is only needed to actually serve
-    from decision import Ollaya
+    from decision import Ollama, Ollaya
     models = [Classifier(d) for d in args.model]
     confirmers = [Ollaya(m, args.ollaya_url, timeout=10, warm=False) for m in args.confirm]
     screens = [Ollaya(m, args.ollaya_url, timeout=10, warm=False) for m in args.screen]
-    for c in confirmers + screens:
+    deciders = [Ollama(m, args.ollama_url, timeout=10, warm=False) for m in args.ollama]
+    for c in confirmers + screens + deciders:
         # At login Ollaya may still be starting; score without it rather than not at all.
         try:
             c.warm()
         except Exception as e:
             print(f"{c.name} not reachable yet ({type(e).__name__}); its scores report an error until it is", flush=True)
-    server = build_server(args, models, confirmers, screens)
+    server = build_server(args, models, confirmers, screens, deciders)
     print(f"coding-agent-guard server on http://{args.host}:{args.port}: {[m.name for m in models]}"
+          f"{' + ollama ' + str([d.name for d in deciders]) if deciders else ''}"
           f"{' + confirm ' + str([c.name for c in confirmers]) if confirmers else ''}"
           f"{' + screen ' + str([s.name for s in screens]) if screens else ''}"
           f"{' + claude ' + args.claude_model if args.claude_model else ''}"
