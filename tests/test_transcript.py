@@ -149,6 +149,18 @@ class TranscriptScrubTests(unittest.TestCase):
         # Assert
         self.assertIsNone(found)
 
+    def test_without_state_whole_file_is_read_and_no_offset_is_recorded(self):
+        # Arrange
+        self.write(hook_row(f"token {GITHUB}") + USER_ROW)
+        os.makedirs(os.path.dirname(self.state))
+        with open(self.state, "w") as f:
+            f.write(str(len(self.read())))
+        # Act
+        found = transcript.scrub(self.path, None, [], leaks.DEFAULT)
+        # Assert
+        self.assertEqual((found["rows"], GITHUB.encode() in self.read(), os.listdir(os.path.dirname(self.state))),
+                         (1, False, ["session"]))
+
     def test_known_value_with_quotes_is_masked_inside_nested_json(self):
         # Arrange
         self.write(USER_ROW + hook_row(f"value {QUOTED} end"))

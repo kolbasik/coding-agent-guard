@@ -131,9 +131,10 @@ def scrub(path, state, known, patterns, mask=True):
 
     Only complete lines are read: a row still being written waits for the next run. A masked
     row is written back only when it still parses as JSON. With mask off the file is opened
-    read-only and the counts say what masking would have done.
+    read-only and the counts say what masking would have done. With state None (a sweep) the
+    whole file is read and no offset is recorded.
     """
-    start, size = _start(state, mask), os.path.getsize(path)
+    start, size = _start(state, mask) if state else 0, os.path.getsize(path)
     if start > size:
         start = 0   # rewritten or replaced since the last run
     kinds, rows, skipped, signed = [], 0, 0, 0
@@ -159,9 +160,10 @@ def scrub(path, state, known, patterns, mask=True):
                         f.seek(start + pos)
                         f.write(masked)
             pos = stop
-    os.makedirs(os.path.dirname(os.path.abspath(state)), exist_ok=True)
-    with open(state if mask else state + COUNTED, "w", encoding="utf-8") as f:
-        f.write(str(start + end))
+    if state:
+        os.makedirs(os.path.dirname(os.path.abspath(state)), exist_ok=True)
+        with open(state if mask else state + COUNTED, "w", encoding="utf-8") as f:
+            f.write(str(start + end))
     if not kinds:
         return None
     return {"found": sorted(set(kinds)), "values": len(kinds), "rows": rows, "skipped": skipped,

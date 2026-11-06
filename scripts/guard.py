@@ -903,13 +903,94 @@ def scrub_transcript(event):
                        **found, "hook_ms": round(1000 * (time.perf_counter() - started))})
 
 
+def sweep(argv):
+    """`scripts/run sweep`, run by hand: the transcript scrub over whole transcripts, from the start of each and
+    without the hook's offsets. Prints kinds, counts, folders and paths, never a value or a row."""
+    import argparse, collections, shutil   # here, not at the top: every hook call imports this module
+    home = os.path.expanduser("~")
+    ap = argparse.ArgumentParser(prog="scripts/run sweep", description="Run the transcript scrub over whole "
+                                 "transcripts, each from its start: counts only, unless --mask.")
+    ap.add_argument("paths", nargs="*", help="transcripts, or folders searched for *.jsonl at any depth; "
+                                             "default ~/.claude/projects")
+    ap.add_argument("--mask", action="store_true", help="copy each transcript that would change to the backup "
+                                                        "folder, then mask it in place; without it nothing is written")
+    ap.add_argument("--backup", help="folder for those copies, created owner-only, must not exist yet; default "
+                                     "~/.claude/backups/coding-agent-guard-sweep-<date>-<time>")
+    args = ap.parse_args(argv)
+    if args.backup and not args.mask:
+        ap.error("--backup only goes with --mask")
+    backup = os.path.abspath(os.path.expanduser(args.backup or os.path.join(
+        home, ".claude", "backups", "coding-agent-guard-sweep-" + time.strftime("%Y-%m-%d-%H%M%S"))))
+    if args.mask and os.path.exists(backup):
+        ap.error(f"{backup} already exists; name a new folder so no earlier backup is overwritten")
+    files = {}   # transcript -> the folder it is counted under: the first one below the folder named
+    for root in args.paths or [os.path.join(home, ".claude", "projects")]:
+        root = os.path.abspath(os.path.expanduser(root))
+        if os.path.isfile(root):
+            files[root] = os.path.basename(os.path.dirname(root))
+        elif os.path.isdir(root):
+            for folder, _, names in os.walk(root):
+                first = os.path.relpath(folder, root).split(os.sep)[0]
+                files.update((os.path.join(folder, n), os.path.basename(root) if first == "." else first)
+                             for n in names if n.endswith(".jsonl"))
+        else:
+            ap.error(f"no such file or folder: {root}")
+
+    cfg = load_config()
+    known, patterns = known_secrets(cfg), build_rules(cfg, []).patterns
+    started, size, copied = time.time(), 0, 0
+    kinds, folders, totals, skipped_in = collections.Counter(), collections.Counter(), collections.Counter(), []
+    for path, folder in sorted(files.items()):
+        size += os.path.getsize(path)
+        found = transcript.scrub(path, None, known, patterns, mask=False)
+        if found and found["rows"] and args.mask:
+            copy = os.path.join(backup, os.path.splitdrive(path)[1].lstrip("\\/"))
+            if not copied:
+                os.makedirs(backup, mode=0o700)
+            os.makedirs(os.path.dirname(copy), exist_ok=True)
+            shutil.copy2(path, copy)
+            copied += 1
+            found = transcript.scrub(path, None, known, patterns)
+        if not found:
+            continue
+        kinds.update(found["found"])
+        folders[folder] += 1
+        totals.update(transcripts=1, values=found["values"], rows=found["rows"], skipped=found["skipped"],
+                      thinking=found["left_in_thinking"])
+        if found["skipped"]:
+            skipped_in.append(path)
+
+    print(f"{'Masked in place' if args.mask else 'Dry run, nothing written'}: read {len(files)} transcripts, "
+          f"{size / 1e6:.1f} MB, in {time.time() - started:.0f} s.")
+    print(f"{totals['transcripts']} transcripts hold {totals['values']} finds; "
+          f"{totals['rows']} rows {'masked' if args.mask else 'to mask'}; {totals['skipped']} rows "
+          f"{'left' if args.mask else 'to leave'} as written because masking would break their JSON; "
+          f"{totals['thinking']} finds in thinking blocks left as written.")
+    for label, counts in (("Kinds (transcripts each is in)", kinds), ("Folders (transcripts with finds)", folders)):
+        if counts:
+            print(f"{label}:")
+            for name, n in counts.most_common():
+                print(f"  {n:6}  {name}")
+    for path in skipped_in:
+        print(f"Rows left as written in: {path}")
+    if copied:
+        print(f"Backup of the {copied} transcripts as they were: {backup}")
+        print("It holds the raw values: check the masked transcripts, then delete it.")
+    elif not args.mask and totals["rows"]:
+        print("Run again with --mask to mask them; each transcript is copied to a backup folder first.")
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    if mode == "sweep":   # run by a person, with arguments instead of a hook event on stdin
+        sweep(sys.argv[2:])
+        return
     # read and agy-read are out for file reads, which scripts/run answers itself when they cannot name a credential file
     handler = {"in": on_output, "out": on_input, "read": on_input,
                "agy-in": on_output, "agy-out": on_input, "agy-read": on_input}.get(mode)
     if handler is None and mode not in ("agy-warn", "scrub"):
-        sys.stderr.write("usage: guard.py in|out|read|scrub|agy-in|agy-out|agy-read|agy-warn < hook-event.json\n")
+        sys.stderr.write("usage: guard.py in|out|read|scrub|agy-in|agy-out|agy-read|agy-warn < hook-event.json\n"
+                         "       guard.py sweep [--mask [--backup DIR]] [PATH ...]\n")
         sys.exit(1)
     event = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
     if mode == "agy-warn":

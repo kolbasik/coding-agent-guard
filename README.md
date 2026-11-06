@@ -597,6 +597,27 @@ Checked in a real `claude -p` session (Claude Code 2.1.319, 2026-11-06): a
 fake token a Read showed was masked in both rows that kept it, and every row
 still parsed. Not tried: Windows.
 
+**Older transcripts.** The hook only scrubs turns that end after it is
+installed. To scrub what was written before, run a sweep from the plugin's
+folder (`~/.claude/plugins/marketplaces/kolbasik` once installed, or a clone):
+
+```sh
+sh scripts/run sweep                     # dry run: counts only, nothing written
+sh scripts/run sweep --mask              # back up, then mask in place
+sh scripts/run sweep ~/.codex/sessions   # other transcripts: files, or folders searched for *.jsonl
+```
+
+It reads every transcript under `~/.claude/projects` (or the files and folders
+named) from its start, ignoring and keeping the hook's offsets, and prints the
+kinds found, the transcripts per kind and per folder, the rows it masks or
+would mask, the rows it leaves because masking would break their JSON, and the
+finds in thinking blocks; never a value or a row. With `--mask` it first copies
+each transcript it changes into a new owner-only folder,
+`~/.claude/backups/coding-agent-guard-sweep-<date>-<time>` unless `--backup`
+names another one that does not exist yet. **The backup holds the raw values:**
+check the masked transcripts, then delete it. A dry run over 1,424 transcripts
+(2.9 GB) took 260 s on an Apple silicon Mac (2026-11-07).
+
 ## Behaviour to know
 
 - **Fail-open.** A guard error lets the call through and prints

@@ -1188,5 +1188,112 @@ class TranscriptScrubHookTests(unittest.TestCase):
         self.assertEqual(modes, [["scrub"]] * 4)
 
 
+class SweepTests(unittest.TestCase):
+    def setUp(self):
+        self.home = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.home.name, ".claude", "projects", "-work-app", "session.jsonl")
+        self.original = transcript_row("hello") + transcript_row(f"token {GITHUB}")
+        self.write(self.path, self.original)
+        self.env = {**os.environ, "HOME": self.home.name, "USERPROFILE": self.home.name}
+        self.env.pop("CLAUDE_PROJECT_DIR", None)
+
+    def tearDown(self):
+        self.home.cleanup()
+
+    def write(self, path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def read(self, path):
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+    def run_sweep(self, *args):
+        return subprocess.run([sys.executable, os.path.join(SCRIPTS, "guard.py"), "sweep", *args],
+                              capture_output=True, text=True, env=self.env)
+
+    def backups(self):
+        folder = os.path.join(self.home.name, ".claude", "backups")
+        return [os.path.join(folder, name) for name in os.listdir(folder)] if os.path.isdir(folder) else []
+
+    def test_dry_run_leaves_the_transcript_as_written(self):
+        # Arrange
+        size = os.path.getsize(self.path)
+        # Act
+        run = self.run_sweep()
+        # Assert
+        self.assertEqual((run.returncode, self.read(self.path), os.path.getsize(self.path), self.backups()),
+                         (0, self.original, size, []))
+
+    def test_dry_run_counts_kinds_and_folders_and_prints_no_value(self):
+        # Arrange: setUp wrote one transcript holding one fake token
+        # Act
+        run = self.run_sweep()
+        # Assert
+        self.assertEqual((GITHUB in run.stdout + run.stderr, "1 transcripts hold 1 finds; 1 rows to mask" in run.stdout,
+                          re.search(r"1\s+github-token", run.stdout) is not None,
+                          re.search(r"1\s+-work-app", run.stdout) is not None),
+                         (False, True, True, True))
+
+    def test_mask_masks_the_transcript_in_place(self):
+        # Arrange
+        size = os.path.getsize(self.path)
+        # Act
+        self.run_sweep("--mask")
+        # Assert
+        lines = [json.loads(line)["message"]["content"] for line in self.read(self.path).splitlines()]
+        self.assertEqual((lines, os.path.getsize(self.path)), (["hello", "token " + "*" * len(GITHUB)], size))
+
+    def test_mask_backs_up_the_transcript_as_it_was_in_an_owner_only_folder(self):
+        # Arrange: setUp wrote one transcript holding one fake token
+        # Act
+        run = self.run_sweep("--mask")
+        # Assert
+        [backup] = self.backups()
+        copy = os.path.join(backup, os.path.splitdrive(os.path.abspath(self.path))[1].lstrip("\\/"))
+        mode = os.stat(backup).st_mode & 0o777 if os.name != "nt" else 0o700
+        self.assertEqual((self.read(copy), mode, f"{backup}\n" in run.stdout, "delete it" in run.stdout),
+                         (self.original, 0o700, True, True))
+
+    def test_mask_reads_rows_the_hook_passed_and_keeps_its_offset(self):
+        # Arrange: the Stop hook's state says the whole transcript was read, as it does after a count-only run
+        state = os.path.join(self.home.name, ".claude", "coding-agent-guard", "scrub",
+                             guard.hashlib.sha256(self.path.encode("utf-8")).hexdigest()[:32])
+        self.write(state, str(os.path.getsize(self.path)))
+        # Act
+        self.run_sweep("--mask")
+        # Assert
+        self.assertEqual((GITHUB in self.read(self.path), self.read(state)), (False, str(os.path.getsize(self.path))))
+
+    def test_named_folder_is_searched_at_any_depth(self):
+        # Arrange: a Codex rollout, outside ~/.claude/projects
+        sessions = os.path.join(self.home.name, ".codex", "sessions")
+        rollout = os.path.join(sessions, "2026", "11", "06", "rollout-1.jsonl")
+        self.write(rollout, transcript_row(f"token {GITHUB}"))
+        # Act
+        self.run_sweep("--mask", sessions)
+        # Assert
+        self.assertEqual((GITHUB in self.read(rollout), GITHUB in self.read(self.path)), (False, True))
+
+    def test_named_file_is_swept_alone(self):
+        # Arrange
+        other = os.path.join(os.path.dirname(self.path), "other.jsonl")
+        self.write(other, transcript_row(f"token {GITHUB}"))
+        # Act
+        self.run_sweep("--mask", other)
+        # Assert
+        self.assertEqual((GITHUB in self.read(other), GITHUB in self.read(self.path)), (False, True))
+
+    def test_existing_backup_folder_is_refused_before_anything_is_masked(self):
+        # Arrange
+        backup = os.path.join(self.home.name, "backup")
+        os.makedirs(backup)
+        # Act
+        run = self.run_sweep("--mask", "--backup", backup)
+        # Assert
+        self.assertEqual((run.returncode, self.read(self.path), os.listdir(backup)), (2, self.original, []))
+
+
 if __name__ == "__main__":
     unittest.main()
