@@ -1,5 +1,5 @@
 {
-  "description": "Redact secrets and flag prompt injection in tool output; block secrets from leaving the machine",
+  "description": "Redact secrets and flag prompt injection in tool output; block secrets from leaving the machine; mask secrets left in the transcript",
   "hooks": {
     "PreToolUse": [
       {
@@ -20,6 +20,34 @@
         "matcher": "Bash|PowerShell|WebFetch|WebSearch|Grep|mcp__.*",
         "hooks": [
           { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" in", "timeout": 60 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" scrub", "timeout": 60 }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" scrub", "timeout": 60 }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" scrub", "timeout": 60 }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" scrub" }
         ]
       }
     ]

@@ -2,19 +2,20 @@
 
 A plugin for Claude Code, Codex and Antigravity that checks what reaches the
 coding agent from outside and what the agent sends out. Codex gets all of it
-except output redaction, and its ask rules block (see [Codex](#codex));
-Antigravity withholds output that holds a secret instead of redacting it (see
-[Antigravity](#antigravity)).
+except output redaction and the transcript scrub, and its ask rules block (see
+[Codex](#codex)); Antigravity withholds output that holds a secret instead of
+redacting it (see [Antigravity](#antigravity)).
 
 | When | Checks | On a hit |
 |---|---|---|
-| After a shell, Grep, web or MCP tool runs | Secrets and personal IDs | Redacted before Claude sees the output; the transcript keeps the redacted copy only |
+| After a shell, Grep, web or MCP tool runs | Secrets and personal IDs | Redacted before Claude sees the output |
 | | Invisible Unicode (zero-width, bidi, tag characters) | Removed |
 | | Instruction-like text in output from outside | A note tells Claude it is data |
 | Before a call that leaves the machine | Secrets and personal IDs in the call, the files it uploads, the staged diff of a commit, the commits of a push | Blocked, with the kind named and the value never repeated |
 | | Instruction-like text and your warn rules in text a person will read | A note, or a block for a rule with `"block": true` |
 | | Your ask rules on a shell command line | The user is asked before it runs |
 | Before Read, Grep or a shell command such as `cat` opens a file | Credential files: `.env`, cloud and CLI logins, private keys | Refused, with the kind of file named |
+| When a Claude Code turn, subagent or session ends | Secrets and personal IDs anywhere in the transcript rows written since the last check: another hook's copy of the raw output, a file Read showed, a pasted prompt | Masked in place with `*` of the same length (see [Transcript scrub](#transcript-scrub)) |
 
 It never checks your own prompts.
 
@@ -99,8 +100,9 @@ what differs there.
 
 To run it without installing, clone it
 (`git clone https://github.com/kolbasik/coding-agent-guard.git`) and register
-`scripts/guard.py in` as a `PostToolUse` hook and `scripts/guard.py out` as a
-`PreToolUse` hook, with the matchers from `hooks/hooks.json`.
+`scripts/guard.py in` as a `PostToolUse` hook, `scripts/guard.py out` as a
+`PreToolUse` hook and `scripts/guard.py scrub` as a `Stop`, `SubagentStop`,
+`StopFailure` and `SessionEnd` hook, with the matchers from `hooks/hooks.json`.
 
 **Speed.** The hook starts a Python process on nearly every tool call it checks, so the
 interpreter matters more than the code. On Windows ARM64 the `python` on `PATH`
@@ -135,6 +137,12 @@ so the guard refuses a shell command that reads a credential file (`cat .env`,
 runs the call, so an [ask rule](#ask-before-a-command) blocks under Codex
 instead, with the same reason; the user runs the command themselves.
 
+The [transcript scrub](#transcript-scrub) does not run under Codex. Codex runs
+the plugin's `Stop`, `SubagentStop` and `SessionEnd` hooks too, so they appear
+among the hooks to trust, but the guard ends them without reading anything:
+Codex's session files keep what the model saw, and their format is not a
+stable interface for hooks.
+
 ## Antigravity
 
 Antigravity's hooks can neither redact a tool's output nor add a note beside
@@ -158,6 +166,8 @@ it, so under `agy` the guard does what they allow (measured with agy 1.3.3 on
   for a command the user chose to always allow.
 - agy blocks a call, or drops its output, when a hook fails or times out, so
   under agy the guard lets the call through on an internal error.
+- The [transcript scrub](#transcript-scrub) does not run under agy: it has no
+  hook at the end of a turn, and its step files keep the raw output.
 
 The `PreInvocation` hook starts Python before every model call: about 0.24 s
 each on a Windows ARM64 VM with the venv (2026-10-11). agy sets no
@@ -191,8 +201,9 @@ are read in that order, and every list extends the built-in one.
 | `log_file` | JSON Lines file with one line per checked call (relative paths resolve against the project); empty turns logging off |
 | `samples_file` | JSON Lines file keeping the redacted text of outputs flagged as injections, up to 50,000 characters each; empty (default) keeps none |
 | `notify` | `"desktop"` pops a notification for confirmed findings; `"none"` (default) only shows the line in Claude Code |
+| `transcript_scrub` | `true` (default) masks secrets found in the Claude Code transcript; `false` only finds them and logs the kinds and counts |
 
-The four `classifier_*` keys, `log_file`, `samples_file` and `notify` replace the default rather than extending it.
+The four `classifier_*` keys, `log_file`, `samples_file`, `notify` and `transcript_scrub` replace the default rather than extending it.
 
 **Notifications and the log.** A *confirmed* finding is a blocked secret or
 personal ID, or an injection a model flagged and the Claude judge did not clear.
@@ -204,7 +215,8 @@ the user sees one line an hour saying the judge is failing, with its error.
 anything with a finding (redactions, pattern hits, cleared flags, blocks,
 warnings, an unreachable server), with its time, session, tool, program names,
 Jira keys, URL host, scores, whether Claude was asked, and how long the hook
-took. The text is kept only as its length and a hash of its redacted form; no
+took; and one line per [transcript scrub](#transcript-scrub) that found
+something. The text is kept only as its length and a hash of its redacted form; no
 text and no secret is written.
 
 **Flagged texts.** With `samples_file` set, the redacted text of every output a
@@ -526,6 +538,47 @@ two-model cascade without scoring again. A cascade is what `server.py` does with
 `--judge-above`: the first model flags alone when sure and asks the second when
 unsure. `--export-benign FILE` copies your benign text into one file for scoring
 on another machine with `--benign-file`.
+
+## Transcript scrub
+
+Claude Code saves each session as a JSON Lines transcript under
+`~/.claude/projects/`, and it saves every hook's stdout there as written. A
+`PostToolUse` hook that replaces a tool's output (this guard, or another
+plugin's) carries the raw output in its own stdout, so a secret redacted
+before Claude saw it can still land on disk. Read output, which is never
+redacted, and pasted prompts land there too.
+
+At the end of every turn (`Stop`, or `StopFailure` when the turn ends in an
+API error), every subagent (`SubagentStop`, on its own transcript) and the
+session (`SessionEnd`), the guard reads the rows written since its last check
+and runs the same checks as on tool output on every string in them, including
+strings that hold JSON such as a hook's stdout. Each secret found is
+overwritten in place with `*` of the same byte length:
+
+- the file is never renamed, truncated or reordered, and a row is written back
+  only when it still parses as JSON;
+- only complete lines are read, so a row still being written waits for the next
+  check; Claude Code writes the transcript asynchronously, so the last rows of a
+  turn can wait for the next turn or the end of the session;
+- the guard keeps how far it has read in one small file per transcript in
+  `~/.claude/coding-agent-guard/scrub/`; deleting it makes the next check read
+  that transcript from the start again;
+- Claude Code gives `SessionEnd` hooks 1.5 s in all, so rows a stopped check
+  did not reach are scrubbed when the session is resumed;
+- with `log_file` set, each check that finds something adds one line with the
+  kinds and counts, never the values; with `transcript_scrub: false` the guard
+  only does that and leaves the transcript as written.
+
+**Cost** on an Apple silicon Mac with uv (2026-11-06, median of 20): 53 ms at
+the end of a turn that wrote 120 KB of rows, 38 ms when nothing new was written
+(a `SessionEnd` right after a `Stop`).
+The first check of an existing transcript reads all of it, once: 0.6 s for a
+5 MB one, 8 s for a 99 MB one.
+
+Checked in a real `claude -p` session (Claude Code 2.1.319, 2026-11-06): a
+fake token a Read showed was masked in both rows that kept it, and every row
+still parsed. Not tried: Windows, and whether the API accepts a resumed
+session whose earlier thinking text was masked.
 
 ## Behaviour to know
 

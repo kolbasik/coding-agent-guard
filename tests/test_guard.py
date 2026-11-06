@@ -1089,5 +1089,94 @@ class AgyTests(unittest.TestCase):
         self.assertEqual(len(set(versions)), 1)
 
 
+def transcript_row(text):
+    return (json.dumps({"type": "user", "message": {"role": "user", "content": text}}, separators=(",", ":")) + "\n")
+
+
+class TranscriptScrubHookTests(unittest.TestCase):
+    def setUp(self):
+        self.home = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.home.name, "session.jsonl")
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write(transcript_row(f"token {GITHUB}"))
+        self.env = {**os.environ, "HOME": self.home.name, "USERPROFILE": self.home.name,
+                    "CLAUDE_PROJECT_DIR": self.home.name}
+
+    def tearDown(self):
+        self.home.cleanup()
+
+    def settings(self, **values):
+        folder = os.path.join(self.home.name, ".claude", "coding-agent-guard")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "settings.json"), "w", encoding="utf-8") as f:
+            json.dump(values, f)
+
+    def run_hook(self, event_name="Stop", **extra):
+        event = {"session_id": "s1", "transcript_path": self.path, "hook_event_name": event_name, **extra}
+        return subprocess.run([sys.executable, os.path.join(SCRIPTS, "guard.py"), "scrub"], input=json.dumps(event),
+                              capture_output=True, text=True, env=self.env)
+
+    def transcript(self, path=None):
+        with open(path or self.path, encoding="utf-8") as f:
+            return f.read()
+
+    def test_stop_hook_masks_the_transcript_and_prints_nothing(self):
+        # Arrange
+        size = os.path.getsize(self.path)
+        # Act
+        run = self.run_hook()
+        # Assert
+        self.assertEqual((run.returncode, run.stdout, GITHUB in self.transcript(), os.path.getsize(self.path)),
+                         (0, "", False, size))
+
+    def test_scrub_switched_off_logs_the_finding_and_leaves_the_transcript(self):
+        # Arrange
+        log = os.path.join(self.home.name, "events.jsonl")
+        self.settings(transcript_scrub=False, log_file=log)
+        # Act
+        self.run_hook()
+        # Assert
+        with open(log, encoding="utf-8") as f:
+            entry = json.loads(f.readline())
+        self.assertEqual((entry["found"], entry["masked"], GITHUB in self.transcript()), (["github-token"], False, True))
+
+    def test_subagent_stop_scrubs_the_subagent_transcript(self):
+        # Arrange
+        agent = os.path.join(self.home.name, "agent.jsonl")
+        with open(agent, "w", encoding="utf-8") as f:
+            f.write(transcript_row(f"agent token {GITHUB}"))
+        # Act
+        self.run_hook("SubagentStop", agent_transcript_path=agent)
+        # Assert
+        self.assertEqual((GITHUB in self.transcript(agent), GITHUB in self.transcript()), (False, True))
+
+    def test_codex_stop_leaves_the_transcript_as_written(self):
+        # Arrange
+        original = self.transcript()
+        # Act
+        run = self.run_hook(turn_id="t1")
+        # Assert
+        self.assertEqual((run.returncode, self.transcript()), (0, original))
+
+    def test_session_end_without_claude_project_dir_leaves_the_transcript_as_written(self):
+        # Arrange: Codex sets no CLAUDE_PROJECT_DIR and its SessionEnd carries no turn_id
+        original = self.transcript()
+        del self.env["CLAUDE_PROJECT_DIR"]
+        # Act
+        run = self.run_hook("SessionEnd", cwd=self.home.name)
+        # Assert
+        self.assertEqual((run.returncode, self.transcript()), (0, original))
+
+    def test_stop_and_session_end_hooks_run_the_scrub(self):
+        # Arrange
+        with open(os.path.join(SCRIPTS, "..", "hooks", "hooks.json"), encoding="utf-8") as f:
+            hooks = json.load(f)["hooks"]
+        # Act
+        modes = [[h["command"].split()[-1] for g in hooks.get(event, []) for h in g["hooks"]]
+                 for event in ("Stop", "SubagentStop", "StopFailure", "SessionEnd")]
+        # Assert
+        self.assertEqual(modes, [["scrub"]] * 4)
+
+
 if __name__ == "__main__":
     unittest.main()

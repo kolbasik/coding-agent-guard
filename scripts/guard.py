@@ -6,6 +6,8 @@
                  off the machine, and a Read or Grep of a credential file; asks the user
                  before a command an ask rule names; flags injection and warn-rule hits
                  in outgoing text without blocking.
+  guard.py scrub  Stop, SubagentStop, StopFailure and SessionEnd. Masks secrets left in the
+                 session transcript (a hook's own stdout keeps the raw tool output there).
   guard.py agy-in | agy-out | agy-warn
                  The same for Antigravity (agy), whose hooks cannot redact output or add
                  a note: output holding a secret is withheld whole, and notes wait for
@@ -16,6 +18,7 @@ there is nothing to say. Never prints a matched value, only its kind.
 Config: ~/.claude/coding-agent-guard/settings.json and <project>/.claude/coding-agent-guard/settings.json, see README.
 """
 import functools
+import hashlib
 import json
 import os
 import re
@@ -28,6 +31,7 @@ from types import SimpleNamespace
 import injection
 import leaks
 import report
+import transcript
 
 SHELLS = ("Bash", "PowerShell")
 FILE_TOOLS = ("Read", "Grep")   # read local files into the conversation; only credential files are refused
@@ -79,6 +83,8 @@ DEFAULTS = {
     "notify": "none",
     # Redacted text of every output flagged as an injection, for later analysis; empty keeps none.
     "samples_file": "",
+    # Mask secrets found in the Claude Code session transcript; false only finds and logs them.
+    "transcript_scrub": True,
 }
 
 SECRET_ENV_NAME = re.compile(r"(?i)token|secret|passw(?:or)?d|api_?key|private_?key|credential")
@@ -851,17 +857,45 @@ def agy_reply(mode, raw, result):
         queue_note(raw, result["note"])
 
 
+SCRUB_STATE = os.path.join(os.path.expanduser("~"), ".claude", "coding-agent-guard", "scrub")
+
+
+def scrub_transcript(event):
+    """Mask the secrets in the transcript rows written since the last turn; a subagent's own transcript on SubagentStop."""
+    # Claude Code only: Codex runs these hooks too, with turn_id on Stop and no CLAUDE_PROJECT_DIR on any of them.
+    if "turn_id" in event or not os.environ.get("CLAUDE_PROJECT_DIR"):
+        return
+    path = event.get("agent_transcript_path") or event.get("transcript_path")
+    if not isinstance(path, str) or not os.path.isfile(path):
+        return
+    # One small file per transcript, kept after the session ends so a resumed one is not read again from the start.
+    state = os.path.join(SCRUB_STATE, hashlib.sha256(path.encode("utf-8")).hexdigest()[:32])
+    if not transcript.pending(path, state):   # most turns end here, before any config or keychain read
+        return
+    cfg = load_config()
+    started = time.perf_counter()
+    found = transcript.scrub(path, state, known_secrets(cfg), build_rules(cfg, []).patterns,
+                             mask=bool(cfg["transcript_scrub"]))
+    if found and cfg["log_file"]:
+        report.record(_project_path(cfg["log_file"]),
+                      {"session": event.get("session_id"), "direction": "transcript", "hook": event.get("hook_event_name"),
+                       **found, "hook_ms": round(1000 * (time.perf_counter() - started))})
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
     # read and agy-read are out for file reads, which scripts/run answers itself when they cannot name a credential file
     handler = {"in": on_output, "out": on_input, "read": on_input,
                "agy-in": on_output, "agy-out": on_input, "agy-read": on_input}.get(mode)
-    if handler is None and mode != "agy-warn":
-        sys.stderr.write("usage: guard.py in|out|read|agy-in|agy-out|agy-read|agy-warn < hook-event.json\n")
+    if handler is None and mode not in ("agy-warn", "scrub"):
+        sys.stderr.write("usage: guard.py in|out|read|scrub|agy-in|agy-out|agy-read|agy-warn < hook-event.json\n")
         sys.exit(1)
     event = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
     if mode == "agy-warn":
         sys.stdout.write(json.dumps(take_notes(event)))
+        return
+    if mode == "scrub":
+        scrub_transcript(event)   # prints nothing: a Stop hook's decision would keep Claude going
         return
     raw = event
     if mode.startswith("agy-"):

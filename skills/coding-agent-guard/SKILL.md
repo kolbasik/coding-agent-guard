@@ -10,8 +10,9 @@ A hook checks tool output on the way in and tool calls on the way out.
 
 ## `[REDACTED:<kind>]` in output
 
-A secret or personal ID was removed before the output reached you, and the
-transcript holds the redacted copy only. Carry on without it. Never try to
+A secret or personal ID was removed before the output reached you; under
+Claude Code, copies of it left in the transcript are masked when the turn
+ends. Carry on without it. Never try to
 recover the value: no re-running with other flags, encodings, `cut` or `od`.
 If a task needs the secret, a script reads it from its store; it never passes
 through the conversation.
