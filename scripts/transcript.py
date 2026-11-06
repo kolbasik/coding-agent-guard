@@ -28,14 +28,17 @@ def offset(state):
         return 0
 
 
-def _start(state, mask):
-    """Where the next run reads from: masking where masking stopped, counting where either stopped."""
-    return offset(state) if mask else max(offset(state), offset(state + COUNTED))
+def _start(state, mask, size):
+    """Where the next run reads from: masking where masking stopped, counting where either stopped. An offset past
+    the end is ignored: the transcript was rewritten or replaced since."""
+    offsets = [offset(state)] if mask else [offset(state), offset(state + COUNTED)]
+    return max([o for o in offsets if o <= size], default=0)
 
 
 def pending(path, state, mask=True):
     """The transcript changed size since the last run in this mode: there are rows to read."""
-    return os.path.getsize(path) != _start(state, mask)
+    size = os.path.getsize(path)
+    return size != _start(state, mask, size)
 
 
 def _strings(value, depth=1, signed=False):
@@ -134,9 +137,8 @@ def scrub(path, state, known, patterns, mask=True):
     read-only and the counts say what masking would have done. With state None (a sweep) the
     whole file is read and no offset is recorded.
     """
-    start, size = _start(state, mask) if state else 0, os.path.getsize(path)
-    if start > size:
-        start = 0   # rewritten or replaced since the last run
+    size = os.path.getsize(path)
+    start = _start(state, mask, size) if state else 0
     kinds, rows, skipped, signed = [], 0, 0, 0
     with open(path, "r+b" if mask else "rb") as f:
         f.seek(start)

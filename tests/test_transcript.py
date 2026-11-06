@@ -149,6 +149,18 @@ class TranscriptScrubTests(unittest.TestCase):
         # Assert
         self.assertIsNone(found)
 
+    def test_shrunk_transcript_is_counted_once_in_count_mode(self):
+        # Arrange
+        self.write(hook_row(f"token {GITHUB}"))
+        os.makedirs(os.path.dirname(self.state))
+        with open(self.state, "w") as f:
+            f.write("999999")
+        self.scrub(mask=False)
+        # Act
+        found = self.scrub(mask=False)
+        # Assert
+        self.assertIsNone(found)
+
     def test_without_state_whole_file_is_read_and_no_offset_is_recorded(self):
         # Arrange
         self.write(hook_row(f"token {GITHUB}") + USER_ROW)
