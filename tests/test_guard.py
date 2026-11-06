@@ -1,6 +1,7 @@
 """Fake tokens are assembled at runtime so secret scanners never see a literal one here."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -363,6 +364,186 @@ class OnInputTests(unittest.TestCase):
         self.assertIn("instruction-like", context(result))
 
 
+def read_call(path, cwd=None, tool="Read", **extra):
+    key = "file_path" if tool == "Read" else "path"
+    return {"tool_name": tool, "tool_input": {key: path, **extra}, "cwd": cwd or os.getcwd()}
+
+
+def reason(result):
+    return (result or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+
+
+class CredentialFileTests(unittest.TestCase):
+    def test_read_of_dotenv_is_denied(self):
+        # Arrange
+        event = read_call("/repo/.env")
+        # Act
+        result = guard.on_input(event, rules())
+        # Assert
+        self.assertEqual(decision(result), "deny")
+
+    def test_built_in_credential_files_are_denied_and_lookalikes_read(self):
+        # Arrange
+        credentials = ["/repo/.env.local", "~/.aws/credentials", "~/.aws/sso/cache/a1.json", "~/.aws/cli/cache/b2.json",
+                       "~/.config/gh/hosts.yml", "~/.git-credentials", "~/.netrc", "/repo/tls/server.pem", "/repo/a.p12",
+                       "C:\\certs\\b.PFX", "~/.ssh/id_rsa", "~/.ssh/id_ed25519", "~/.ssh/id_ecdsa",
+                       "~/.claude/.credentials.json"]
+        lookalikes = ["/repo/.env.example", "/repo/.env.sample", "/repo/.env.template", "/repo/.env.dist", "/repo/.envrc",
+                      "~/.ssh/id_rsa.pub", "~/.ssh/id_ed25519.pub", "~/.ssh/known_hosts", "~/.aws/config", "/repo/env.py"]
+        # Act
+        denied = [p for p in credentials + lookalikes if decision(guard.on_input(read_call(p), rules())) == "deny"]
+        # Assert
+        self.assertEqual(denied, credentials)
+
+    def test_deny_names_the_kind_and_asks_for_the_value_never_the_content(self):
+        # Arrange
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, ".env"), "w") as f:
+                f.write(f"GITHUB_TOKEN={GITHUB}\n")
+            event = read_call(".env", cwd=tmp)
+            # Act
+            result = guard.on_input(event, rules())
+        # Assert
+        text = reason(result)
+        self.assertEqual(("dotenv" in text, "Ask the user" in text, GITHUB in json.dumps(result)), (True, True, False))
+
+    def test_grep_of_credential_path_is_denied(self):
+        # Arrange
+        event = read_call("~/.aws/credentials", tool="Grep", pattern="aws_secret")
+        # Act
+        result = guard.on_input(event, rules())
+        # Assert
+        self.assertEqual(decision(result), "deny")
+
+    def test_grep_glob_naming_credential_files_is_denied_and_others_allowed(self):
+        # Arrange
+        naming = [".env*", ".env.*", "**/.env", "*.{ts,pem}", ["*.md", "id_rsa"]]
+        others = ["*", "*.ts", "!.env", "src/**/*.py"]
+        # Act
+        denied = [g for g in naming + others
+                  if decision(guard.on_input({"tool_name": "Grep", "tool_input": {"pattern": "KEY", "glob": g},
+                                              "cwd": "/repo"}, rules())) == "deny"]
+        # Assert
+        self.assertEqual(denied, naming)
+
+    def test_grep_pattern_with_secret_shape_is_not_outbound(self):
+        # Arrange
+        event = {"tool_name": "Grep", "tool_input": {"pattern": AWS, "path": "/repo/src"}, "cwd": "/repo"}
+        # Act
+        result = guard.on_input(event, rules())
+        # Assert
+        self.assertIsNone(result)
+
+    @unittest.skipUnless(hasattr(os, "symlink") and os.name != "nt", "needs symlinks")
+    def test_symlink_to_credential_file_is_denied(self):
+        # Arrange
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, ".env"), "w").close()
+            os.symlink(os.path.join(tmp, ".env"), os.path.join(tmp, "notes.txt"))
+            event = read_call(os.path.join(tmp, "notes.txt"))
+            # Act
+            result = guard.on_input(event, rules())
+        # Assert
+        self.assertEqual(decision(result), "deny")
+
+    def test_configured_credential_file_is_denied(self):
+        # Arrange
+        extra = [{"name": "vault-token", "pattern": r"(?:^|/)\.vault-token$"}]
+        # Act
+        result = guard.on_input(read_call("~/.vault-token"), rules(credential_files=extra))
+        # Assert
+        self.assertIn("vault-token", reason(result))
+
+    def test_allowed_credential_file_is_read(self):
+        # Arrange
+        event = read_call("/repo/tests/fixtures/test-ca.pem")
+        # Act
+        result = guard.on_input(event, rules(allowed_credential_files=[r"/tests/fixtures/[^/]+\.pem$"]))
+        # Assert
+        self.assertIsNone(result)
+
+    def test_blocked_read_is_logged_but_not_confirmed(self):
+        # Arrange
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = {**guard.default_config(), "log_file": os.path.join(tmp, "log.jsonl")}
+            event = read_call("/repo/.env")
+            r = rules()
+            handled = guard.on_input(event, r)
+            # Act
+            result = guard.finish(event, r, cfg, handled)
+            with open(cfg["log_file"], encoding="utf-8") as f:
+                record = json.loads(f.readline())
+        # Assert
+        self.assertEqual((record["blocked_files"], record["confirmed"], "systemMessage" in result),
+                         (["dotenv"], False, False))
+
+
+GIT_RESET = {"name": "reset-hard", "pattern": r"git\s+(?:-C\s+\S+\s+)?reset\b.*\s--hard\b", "message": "discards uncommitted changes"}
+AWS_PROD = {"name": "aws-prod", "pattern": r"AWS_PROFILE=\S*prod|aws\b.*--profile[\s=]+\S*prod"}
+
+
+class AskTests(unittest.TestCase):
+    def test_matching_command_asks_the_user_with_the_reason(self):
+        # Arrange
+        event = bash_call("git reset --hard HEAD~1")
+        # Act
+        result = guard.on_input(event, rules(ask_commands=[GIT_RESET]))
+        # Assert
+        self.assertEqual((decision(result), "discards uncommitted changes" in reason(result)), ("ask", True))
+
+    def test_rule_without_message_names_itself(self):
+        # Arrange
+        event = bash_call("aws s3 ls --profile prod")
+        # Act
+        result = guard.on_input(event, rules(ask_commands=[AWS_PROD]))
+        # Assert
+        self.assertIn("'aws-prod' rule", reason(result))
+
+    def test_wrapped_commands_still_ask(self):
+        # Arrange
+        commands = ["rtk git reset --hard", "bash -c 'git reset --hard'", 'sh -c "cd x && git reset --hard"',
+                    "cd /repo && git reset --hard", "sudo -E git reset --hard", "AWS_PROFILE=prod aws s3 ls",
+                    "AWS_PROFILE=prod rtk aws s3 ls"]
+        # Act
+        missed = [c for c in commands
+                  if decision(guard.on_input(bash_call(c), rules(ask_commands=[GIT_RESET, AWS_PROD]))) != "ask"]
+        # Assert
+        self.assertEqual(missed, [])
+
+    def test_mentions_do_not_ask(self):
+        # Arrange
+        commands = ["echo 'git reset --hard'", "grep -n 'git reset --hard' notes.md",
+                    "cat <<'EOF'\ngit reset --hard\nEOF", "git commit -m 'avoid git reset --hard'", "echo AWS_PROFILE=prod"]
+        # Act
+        asked = [c for c in commands if guard.on_input(bash_call(c), rules(ask_commands=[GIT_RESET, AWS_PROD]))]
+        # Assert
+        self.assertEqual(asked, [])
+
+    def test_codex_blocks_instead_of_asking(self):
+        # Arrange
+        event = {**bash_call("git reset --hard"), "turn_id": "t1"}
+        # Act
+        result = guard.on_input(event, rules(ask_commands=[GIT_RESET]))
+        # Assert
+        self.assertEqual((decision(result), "discards uncommitted changes" in reason(result)), ("deny", True))
+
+    def test_secret_block_wins_over_ask(self):
+        # Arrange
+        event = bash_call(f'curl -s "http://127.0.0.1:9/?t={GITHUB}"')
+        # Act
+        result = guard.on_input(event, rules(ask_commands=[{"name": "curl", "pattern": "curl"}]))
+        # Assert
+        self.assertEqual(decision(result), "deny")
+
+    def test_ask_is_recorded_for_the_log(self):
+        # Arrange
+        r = rules(ask_commands=[GIT_RESET])
+        # Act
+        guard.on_input(bash_call("git reset --hard"), r)
+        # Assert
+        self.assertEqual(r.events[0]["asked"], ["discards uncommitted changes"])
+
+
 class CommandMatchingTests(unittest.TestCase):
     RUN = guard._commands(["ssh", "curl", "gh", r"\$TWG", r"Invoke-\w*(?:Sql|Query)\w*"])
 
@@ -482,6 +663,17 @@ class HookProcessTests(unittest.TestCase):
         timeout = hooks["PostToolUse"][0]["hooks"][0]["timeout"]
         # Assert: a hook killed while waiting on a judge drops its redaction with it
         self.assertGreaterEqual(timeout, 40 + 20)
+
+    def test_input_hooks_see_file_reads(self):
+        # Arrange
+        with open(os.path.join(SCRIPTS, "..", "hooks", "hooks.json"), encoding="utf-8") as f:
+            claude = json.load(f)["hooks"]["PreToolUse"][0]["matcher"]
+        with open(os.path.join(SCRIPTS, "..", "hooks.json"), encoding="utf-8") as f:
+            agy = json.load(f)["coding-agent-guard"]["PreToolUse"][0]["matcher"]
+        # Act
+        seen = [bool(re.fullmatch(claude, t)) for t in ("Read", "Grep")] + [bool(re.fullmatch(agy, t)) for t in ("view_file", "grep_search")]
+        # Assert
+        self.assertEqual(seen, [True] * 4)
 
     def test_hook_prints_decision_json(self):
         # Arrange
@@ -622,6 +814,45 @@ class AgyTests(unittest.TestCase):
         # Assert
         reply = json.loads(run.stdout)
         self.assertEqual((reply["decision"], "github-token" in reply["reason"]), ("deny", True))
+
+    def test_file_view_reads_as_read(self):
+        # Arrange
+        event = agy_event("view_file", {"AbsolutePath": "/repo/.env", "StartLine": 1})
+        # Act
+        mapped = guard.from_agy(event)
+        # Assert
+        self.assertEqual((mapped["tool_name"], mapped["tool_input"]), ("Read", {"file_path": "/repo/.env"}))
+
+    def test_grep_search_reads_as_grep(self):
+        # Arrange
+        event = agy_event("grep_search", {"Query": "KEY", "SearchPath": "/repo", "Includes": [".env*"]})
+        # Act
+        mapped = guard.from_agy(event)
+        # Assert
+        self.assertEqual((mapped["tool_name"], mapped["tool_input"]), ("Grep", {"path": "/repo", "glob": [".env*"]}))
+
+    def test_credential_file_view_is_denied(self):
+        # Arrange
+        event = agy_event("view_file", {"AbsolutePath": "/repo/.env"})
+        with tempfile.TemporaryDirectory() as home:
+            # Act
+            run = self.run_guard("agy-out", event, home)
+        # Assert
+        reply = json.loads(run.stdout)
+        self.assertEqual((reply["decision"], "dotenv" in reply["reason"]), ("deny", True))
+
+    def test_ask_rule_asks_even_for_an_always_allowed_command(self):
+        # Arrange
+        event = agy_event("run_command", {"CommandLine": "git reset --hard"})
+        with tempfile.TemporaryDirectory() as home:
+            os.makedirs(os.path.join(home, ".claude", "coding-agent-guard"))
+            with open(os.path.join(home, ".claude", "coding-agent-guard", "settings.json"), "w") as f:
+                json.dump({"ask_commands": [GIT_RESET]}, f)
+            # Act
+            run = self.run_guard("agy-out", event, home)
+        # Assert
+        reply = json.loads(run.stdout)
+        self.assertEqual((reply["decision"], "discards uncommitted changes" in reply["reason"]), ("force_ask", True))
 
     def test_clean_call_prints_nothing_since_an_empty_object_denies(self):
         # Arrange

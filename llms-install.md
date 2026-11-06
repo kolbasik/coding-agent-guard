@@ -112,7 +112,12 @@ Do this after the hooks have loaded (step 2).
    `coding-agent-guard: withheld this output, it holds 1 secret value(s)
    (github-token)`. agy still shows the raw output in its own terminal. Tell
    the user about this limit.
-3. If neither check shows the guard, look for `coding-agent-guard:` lines on
+3. **Credential file** (Claude Code and Antigravity). Read a file named
+   `.env` in the current folder; it need not exist, since the guard refuses
+   before the file is opened. Expected: the call is denied with a reason that
+   starts with `coding-agent-guard: blocked, this would read a credential file
+   (dotenv)`. Codex has no file-reading tool, so skip this under Codex.
+4. If none of the checks shows the guard, look for `coding-agent-guard:` lines on
    stderr. `no Python 3 on PATH` means step 1.3 is not done. Report anything
    else to the user word for word.
 
@@ -127,6 +132,11 @@ these before writing a file:
 - **Desktop notifications** for confirmed findings.
 - **Their own CLIs**, for example a Jira or cloud CLI, marked as reading outside
   text or sending data out.
+- **Commands to confirm first**, such as a force push, `git reset --hard` or
+  `terraform apply` (`ask_commands`; the README has examples).
+- **Files to protect or allow**: more credential files for Read and Grep to
+  refuse (`credential_files`), or a path to let through
+  (`allowed_credential_files`).
 
 Settings live in `~/.claude/coding-agent-guard/settings.json` (all projects) and
 `<project>/.claude/coding-agent-guard/settings.json` (one project), under Codex

@@ -3,8 +3,9 @@
   guard.py in    PostToolUse. Strips invisible Unicode, redacts secrets and personal
                  IDs, and flags instruction-like text in output from outside sources.
   guard.py out   PreToolUse. Denies a call that would send a secret or a personal ID
-                 off the machine; flags injection and warn-rule hits in outgoing text
-                 without blocking.
+                 off the machine, and a Read or Grep of a credential file; asks the user
+                 before a command an ask rule names; flags injection and warn-rule hits
+                 in outgoing text without blocking.
   guard.py agy-in | agy-out | agy-warn
                  The same for Antigravity (agy), whose hooks cannot redact output or add
                  a note: output holding a secret is withheld whole, and notes wait for
@@ -29,6 +30,7 @@ import leaks
 import report
 
 SHELLS = ("Bash", "PowerShell")
+FILE_TOOLS = ("Read", "Grep")   # read local files into the conversation; only credential files are refused
 
 # Every list here is extended, never replaced, by the config files.
 DEFAULTS = {
@@ -47,6 +49,26 @@ DEFAULTS = {
     "secret_env": [],
     "credential_manager_filters": [],
     "warn": [],
+    # Files Read and Grep refuse to open: a regex searched, case-insensitively, in the absolute path with / separators.
+    "credential_files": [{"name": name, "pattern": pattern} for name, pattern in (
+        ("dotenv", r"(?:^|/)\.env(?:\.(?!(?:example|sample|template|dist)$)[^/]+)?$"),
+        ("aws-credentials", r"(?:^|/)\.aws/credentials$"),
+        ("aws-login-cache", r"(?:^|/)\.aws/(?:sso|cli)/cache/[^/]+$"),
+        ("gh-login", r"(?:^|/)(?:\.config/gh|GitHub CLI)/hosts\.yml$"),
+        ("git-credentials", r"(?:^|/)(?:\.git-credentials|\.config/git/credentials)$"),
+        ("netrc", r"(?:^|/)[._]netrc$"),
+        ("key-or-certificate", r"\.(?:pem|p12|pfx)$"),
+        ("ssh-private-key", r"(?:^|/)id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?$"),
+        ("coding-agent-login", r"(?:^|/)(?:\.credentials\.json|\.codex/auth\.json|\.gemini/oauth_creds\.json)$"),
+        ("docker-login", r"(?:^|/)\.docker/config\.json$"),
+        ("kube-config", r"(?:^|/)\.kube/config$"),
+        ("pypi-login", r"(?:^|/)\.pypirc$"),
+        ("postgres-password-file", r"(?:^|/)(?:\.pgpass|postgresql/pgpass\.conf)$"),
+        ("gcloud-login", r"(?:^|/)gcloud/(?:application_default_credentials\.json|credentials\.db|access_tokens\.db)$"),
+    )],
+    "allowed_credential_files": [],
+    # Shell commands the user must approve before they run.
+    "ask_commands": [],
     # Optional scoring server (scripts/server.py); these replace rather than extend.
     "classifier_url": "",
     "classifier_threshold": 0.9,
@@ -233,6 +255,17 @@ def _commands(names):
     return _Invocations(names) if names else NEVER
 
 
+class _CommandLine:
+    """Matches a pattern from the start of each command a command line runs, as written and without its wrappers,
+    so `rtk git push -f`, `bash -c 'git push -f'` and `AWS_PROFILE=prod aws ...` are all seen."""
+
+    def __init__(self, pattern):
+        self.rx = re.compile(pattern)
+
+    def search(self, command):
+        return any(self.rx.match(s) for s in (*_split(_strip_heredocs(command)), *command_segments(command)))
+
+
 def _tools(names):
     return re.compile("^(?:" + "|".join(names) + ")$") if names else NEVER
 
@@ -253,6 +286,11 @@ def build_rules(cfg, known):
             commands=_commands(w["commands"]) if w.get("commands") else None,
             block=bool(w.get("block")),
         ) for w in cfg["warn"]],
+        credential_files=[(c["name"], re.compile(c["pattern"], re.I)) for c in cfg["credential_files"]],
+        allowed_credential_files=re.compile("|".join(cfg["allowed_credential_files"]), re.I)
+        if cfg["allowed_credential_files"] else NEVER,
+        ask=[SimpleNamespace(command=_CommandLine(a["pattern"]), message=a.get("message") or f"matches the '{a['name']}' rule")
+             for a in cfg["ask_commands"]],
         classifier=SimpleNamespace(url=cfg["classifier_url"], threshold=cfg["classifier_threshold"],
                                    timeout=cfg["classifier_timeout"],
                                    token=os.environ.get(cfg["classifier_token_env"], ""), scores=None, error=None,
@@ -478,16 +516,54 @@ def attached_files(tool, data, command, cwd):
     return [t for t in map(read_text, paths) if t]
 
 
+def read_paths(data, cwd):
+    """Paths a Read or Grep call names: its path, and the path joined with each glob, wildcards dropped and filled."""
+    path = data.get("file_path") or data.get("path")
+    paths = [path] if isinstance(path, str) and path.strip() else []
+    base = paths[0] if paths else cwd
+    globs = data.get("glob")
+    for glob in globs if isinstance(globs, list) else [globs]:
+        if not isinstance(glob, str) or glob.startswith("!"):   # a "!" glob excludes files
+            continue
+        brace = re.search(r"\{([^{}]*)\}", glob)   # shortcut: one {a,b} group per glob, enough for *.{env,pem}
+        for alt in [glob[:brace.start()] + p + glob[brace.end():] for p in brace.group(1).split(",")] if brace else [glob]:
+            for fill in ("", "x"):   # .env* names .env, .env.* names .env.x
+                paths.append(os.path.join(base, re.sub(r"\*+|\?|\[[^\]]*\]", fill, alt)))
+    return [to_path(p, cwd) for p in paths]
+
+
+def credential_kind(path, rules):
+    """The kind of credential file a path names, itself or through a symlink; None for any other or an allowed path."""
+    for p in dict.fromkeys((path, os.path.realpath(path))):
+        p = p.replace("\\", "/")
+        if not rules.allowed_credential_files.search(p):
+            kind = next((name for name, rx in rules.credential_files if rx.search(p)), None)
+            if kind:
+                return kind
+    return None
+
+
 def _deny(reason):
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                    "permissionDecisionReason": reason}}
 
 
 def on_input(event, rules):
-    """PreToolUse: deny when a secret, personal ID or blocking rule hit would leave; else an optional note."""
+    """PreToolUse: deny a credential file read, or when a secret, personal ID or blocking rule hit would leave;
+    ask before a command an ask rule names; else an optional note."""
     tool = event.get("tool_name", "")
     data = event.get("tool_input") or {}
     cwd = event.get("cwd") or os.getcwd()
+    if tool in FILE_TOOLS:
+        # Refused, not redacted: Edit needs a file's exact bytes from Read. Logged only when refused.
+        rules.call = {"direction": "out", "outbound": False, "log": False}
+        kinds = _unique(filter(None, (credential_kind(p, rules) for p in read_paths(data, cwd))))
+        if not kinds:
+            return None
+        rules.events.append({"direction": "out", "blocked_files": kinds})
+        return _deny(f"coding-agent-guard: blocked, this would read a credential file ({', '.join(kinds)}). Do not "
+                     "read it another way. Ask the user for the specific value or setting you need instead; if the "
+                     "file holds no secrets, the user can list it in allowed_credential_files.")
     command = data.get("command", "") if tool in SHELLS else ""
     outbound = _leaves_machine(tool, rules) or bool(rules.outbound.search(command))
     rules.call = {"direction": "out", "outbound": outbound, "log": outbound}   # local calls only when they find something
@@ -525,6 +601,17 @@ def on_input(event, rules):
             rules.events.append({"direction": "out", "blocked_rules": stops, "injection": hits})
             return _deny(f"coding-agent-guard: blocked, the text being sent {'; '.join(stops)}. "
                          "Rewrite it without that and send again.")
+    asks = [rule.message for rule in rules.ask if rule.command.search(command)]
+    if asks:
+        rules.events.append({"direction": "out", "asked": asks, "warnings": warnings})
+        reason = f"coding-agent-guard: this command {'; '.join(asks)}, so it needs the user's approval."
+        if "turn_id" in event:   # Codex runs the call when a hook answers "ask", so block instead
+            return _deny(reason + " This agent cannot ask for it, so the call is blocked: tell the user what you "
+                                  "wanted to run and why, and let them run it.")
+        out = {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": reason}
+        if warnings:
+            out["additionalContext"] = "\n".join(warnings)
+        return {"hookSpecificOutput": out}
     if not warnings:
         return None
     rules.events.append({"direction": "out", "warnings": warnings})
@@ -652,6 +739,8 @@ def from_agy(event):
         "read_url_content": ("WebFetch", {"url": args.get("Url", "")}),
         "search_web": ("WebSearch", {"query": args.get("query", "")}),
         "call_mcp_tool": (f"mcp__{args.get('ServerName', '')}__{args.get('ToolName', '')}", args.get("Arguments") or {}),
+        "view_file": ("Read", {"file_path": args.get("AbsolutePath", "")}),
+        "grep_search": ("Grep", {"path": args.get("SearchPath", ""), "glob": args.get("Includes")}),
     }.get(name, (name, args))
     workspace = (event.get("workspacePaths") or [None])[0]
     return {"tool_name": tool, "tool_input": data, "cwd": args.get("Cwd") or workspace,
@@ -698,13 +787,15 @@ def take_notes(event):
 
 
 def agy_reply(mode, raw, result):
-    """Antigravity's hook contract: PreToolUse denies or says nothing (`{}` would deny); PostToolUse withholds
+    """Antigravity's hook contract: PreToolUse denies, asks or says nothing (`{}` would deny); PostToolUse withholds
     the output by failing with the reason on stderr, or says nothing; every other note waits for PreInvocation."""
     result = result or {}
     if mode == "agy-out":
         out = result.get("hookSpecificOutput") or {}
-        if out.get("permissionDecision") == "deny":
-            sys.stdout.write(json.dumps({"decision": "deny", "reason": out["permissionDecisionReason"]}))
+        if out.get("permissionDecision") in ("deny", "ask"):
+            # "force_ask" prompts even for a command the user always allows, as Claude Code's "ask" does
+            decision = "deny" if out["permissionDecision"] == "deny" else "force_ask"
+            sys.stdout.write(json.dumps({"decision": decision, "reason": out["permissionDecisionReason"]}))
         elif out.get("additionalContext"):
             queue_note(raw, out["additionalContext"])
         return

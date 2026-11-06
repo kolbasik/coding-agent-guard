@@ -1,6 +1,6 @@
 ---
 name: coding-agent-guard
-description: What coding-agent-guard's redactions, blocks, notes and notifications mean and what to do next, how its models were chosen, and how to analyse its findings log, re-run its benchmarks or set up and repair its scoring server. Use when tool output shows [REDACTED:<kind>], a call is denied with "coding-agent-guard: blocked", a "coding-agent-guard:" note flags instruction-like text or a rule on outgoing text, the user asks what coding-agent-guard found or why, or model notes stop appearing.
+description: What coding-agent-guard's redactions, blocks, notes and notifications mean and what to do next, how its models were chosen, and how to analyse its findings log, re-run its benchmarks or set up and repair its scoring server. Use when tool output shows [REDACTED:<kind>], a call is denied with "coding-agent-guard: blocked" or needs the user's approval because of an ask rule, a "coding-agent-guard:" note flags instruction-like text or a rule on outgoing text, the user asks what coding-agent-guard found or why, or model notes stop appearing.
 user-invocable: false
 ---
 
@@ -18,6 +18,22 @@ through the conversation.
 
 Redaction covers shell, web and MCP output, not the Read tool. When a redacted
 line has to be edited, Read the file for its exact bytes.
+
+## "coding-agent-guard: blocked, this would read a credential file ..."
+
+Read or Grep was about to open a file that holds logins or keys (`.env`, cloud
+and CLI logins, private keys); the kind is in brackets. Do not read it another
+way (`cat`, `grep`, a script). Ask the user for the specific value or setting
+the task needs. If the file holds no secrets, the user can add its path to
+`allowed_credential_files`.
+
+## "coding-agent-guard: this command ..., so it needs the user's approval"
+
+An ask rule the user set matched the command. In Claude Code the user is asked
+first; when the call comes back denied, the user said no or nobody could answer
+(`claude -p`): do not reword the command to get past the rule. Tell the user
+what you wanted to run and why. Under Codex the call is always blocked, as
+Codex cannot ask; the user runs the command themselves.
 
 ## "... secret value(s) ... that Codex could not hide from you"
 

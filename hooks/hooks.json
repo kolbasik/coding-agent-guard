@@ -3,7 +3,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|PowerShell|WebFetch|Artifact|mcp__.*",
+        "matcher": "Bash|PowerShell|WebFetch|Artifact|Read|Grep|mcp__.*",
         "hooks": [
           { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" out", "timeout": 20 }
         ]

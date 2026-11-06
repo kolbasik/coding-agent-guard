@@ -2,7 +2,7 @@
   "coding-agent-guard": {
     "PreToolUse": [
       {
-        "matcher": "run_command|read_url_content|call_mcp_tool",
+        "matcher": "run_command|read_url_content|call_mcp_tool|view_file|grep_search",
         "hooks": [{ "type": "command", "command": "sh ./scripts/run agy-out", "timeout": 20 }]
       }
     ],

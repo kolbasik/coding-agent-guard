@@ -2,8 +2,9 @@
 
 A plugin for Claude Code, Codex and Antigravity that checks what reaches the
 coding agent from outside and what the agent sends out. Codex gets all of it
-except output redaction (see [Codex](#codex)); Antigravity withholds output that
-holds a secret instead of redacting it (see [Antigravity](#antigravity)).
+except output redaction and the credential-file check, and its ask rules block
+(see [Codex](#codex)); Antigravity withholds output that holds a secret instead
+of redacting it (see [Antigravity](#antigravity)).
 
 | When | Checks | On a hit |
 |---|---|---|
@@ -12,6 +13,8 @@ holds a secret instead of redacting it (see [Antigravity](#antigravity)).
 | | Instruction-like text in output from outside | A note tells Claude it is data |
 | Before a call that leaves the machine | Secrets and personal IDs in the call, the files it uploads, the staged diff of a commit, the commits of a push | Blocked, with the kind named and the value never repeated |
 | | Instruction-like text and your warn rules in text a person will read | A note, or a block for a rule with `"block": true` |
+| | Your ask rules on a shell command line | The user is asked before it runs |
+| Before Read or Grep opens a file | Credential files: `.env`, cloud and CLI logins, private keys | Refused, with the kind of file named |
 
 It never checks your own prompts.
 
@@ -25,6 +28,14 @@ It never checks your own prompts.
   password, api key, private key or credential, plus Windows Credential Manager
   entries or macOS keychain generic passwords you list. These match exactly, whatever their shape.
 - **Personal IDs:** Finnish henkilötunnus, check character verified.
+- **Credential files:** `.env` and `.env.*` (not `.env.example`, `.sample`,
+  `.template` or `.dist`), `~/.aws/credentials` and the AWS SSO and CLI caches,
+  the GitHub CLI's `hosts.yml`, `~/.git-credentials`, `.netrc`, `*.pem`,
+  `*.p12`, `*.pfx`, private SSH keys (`id_rsa`, `id_ed25519`, `id_ecdsa`,
+  `id_dsa`; not `.pub`), coding-agent logins (Claude Code's
+  `.credentials.json`, Codex's `auth.json`, Gemini's `oauth_creds.json`),
+  Docker's `config.json`, `~/.kube/config`, `.pypirc`, `.pgpass` and gcloud's
+  credential files. A symlink to one counts as the file itself.
 - **Injection:** "ignore previous instructions" and variants, fake role tags
   and lines, "don't tell the user", requests to send credentials somewhere,
   hidden tag characters.
@@ -113,6 +124,12 @@ works as under Claude Code: secrets leaving the machine are blocked, and
 instruction-like text gets a note. Codex sets no `CLAUDE_PROJECT_DIR`, so the
 project settings are found from the session's working folder.
 
+Codex has no file-reading tool of its own: it reads files through the shell,
+so a credential file read with `cat` is not refused, and its secrets reach the
+model with the note above. Codex treats a hook's "ask" as a failed hook and
+runs the call, so an [ask rule](#ask-before-a-command) blocks under Codex
+instead, with the same reason; the user runs the command themselves.
+
 ## Antigravity
 
 Antigravity's hooks can neither redact a tool's output nor add a note beside
@@ -128,6 +145,10 @@ it, so under `agy` the guard does what they allow (measured with agy 1.3.3 on
 - Secrets leaving the machine are blocked as under Claude Code, and the model
   sees the reason. MCP calls are checked as `mcp__<server>__<tool>`, so the
   same `text_tools` and `local_tools` patterns apply.
+- Added later and not yet tried in a live agy session: `view_file` and
+  `grep_search` refuse credential files as Read and Grep do, and an ask rule
+  answers `force_ask`, which agy's own hook documentation (agy 1.4.7) says
+  prompts even for a command the user chose to always allow.
 - agy blocks a call, or drops its output, when a hook fails or times out, so
   under agy the guard lets the call through on an internal error.
 
@@ -153,6 +174,9 @@ are read in that order, and every list extends the built-in one.
 | `secret_env` | Extra environment variable names whose values are secrets |
 | `credential_manager_filters` | Name filters whose values are secrets, e.g. `"myapp/*"`: Windows Credential Manager target names, or on macOS keychain generic-password service names, read through `/usr/bin/security` (so only items that trust it, such as ones it wrote, are read without a prompt; an ssh session cannot read them) |
 | `warn` | `{"name", "pattern", "message"?, "commands"?, "block"?}` rules for outgoing text; `commands` limits a rule to matching commands, `"block": true` denies the call instead of adding a note |
+| `ask_commands` | `{"name", "pattern", "message"?}` rules for shell commands the user must approve first; see [Ask before a command](#ask-before-a-command) |
+| `credential_files` | Extra `{"name", "pattern"}` credential files that Read and Grep refuse; the regex is searched, ignoring case, in the file's absolute path with `/` separators, e.g. `"/\\.vault-token$"` |
+| `allowed_credential_files` | Regexes, matched the same way, for paths to read even though they look like a credential file, such as a test fixture: `"/tests/fixtures/[^/]+\\.pem$"` |
 | `classifier_url` | Base URL of a scoring server (below); empty turns the model check off |
 | `classifier_threshold` | Score at or above which a model flags the output; default `0.9` |
 | `classifier_timeout` | Seconds to wait for the server before falling back to patterns; default `5`. Keep it at 40 or less: the output hook is stopped after 60 s, and a stopped hook drops its redactions too |
@@ -181,7 +205,7 @@ model or pattern flagged as an injection is kept there, linked to its log line
 by `sha256`, so false alarms and real attacks can be studied later. Unflagged
 text is never kept. The file holds real attacks and whatever the flagged source
 contained, so keep it out of version control and do not open it in Claude Code:
-the Read tool is not checked by the hook.
+the Read tool does not redact it.
 
 **Stats.** `python scripts/stats.py [--days 7] [--by day|week]` reads the log
 and prints, per day or week, how many calls came in and from outside, how many
@@ -199,6 +223,44 @@ at other classifier and screen thresholds. It prints numbers only.
   "warn": [{ "name": "internal-host", "pattern": "\\.corp\\.internal\\b", "message": "names an internal host" }]
 }
 ```
+
+## Ask before a command
+
+An ask rule makes the host ask the user before a shell command runs, showing
+the rule's message. None ship by default; some to start from:
+
+```json
+{
+  "ask_commands": [
+    { "name": "force-push", "pattern": "git\\s+(?:-C\\s+\\S+\\s+)?push\\b(?=.*\\s(?:-f|--force\\S*|\\+\\S+)(?:\\s|$))(?=.*[\\s:+](?:main|master)(?:\\s|$))", "message": "force-pushes to main or master" },
+    { "name": "reset-hard", "pattern": "git\\s+(?:-C\\s+\\S+\\s+)?reset\\b.*\\s--hard\\b", "message": "discards uncommitted changes" },
+    { "name": "clean", "pattern": "git\\s+(?:-C\\s+\\S+\\s+)?clean\\b.*\\s(?:-[a-zA-Z]*f|--force)", "message": "deletes untracked files" },
+    { "name": "rm-rf", "pattern": "rm\\s+-(?=[a-zA-Z]*[rR])(?=[a-zA-Z]*f)[a-zA-Z]+\\s+(?!(?:/tmp/|/private/tmp/|\"?\\$\\{?TMPDIR\\b))", "message": "deletes a folder outside a temp folder" },
+    { "name": "terraform-apply", "pattern": "(?:terraform|tofu)\\b.*\\s(?:apply|destroy)\\b", "message": "changes infrastructure" },
+    { "name": "read-secret", "pattern": "aws\\b.*\\bsecretsmanager\\s+get-secret-value\\b", "message": "reads a secret value" },
+    { "name": "aws-prod", "pattern": "AWS_PROFILE=\\S*prod|aws\\b.*--profile[\\s=]+\\S*prod", "message": "uses a production AWS profile" }
+  ]
+}
+```
+
+- `pattern` must match from the start of a command as it runs: after `;`,
+  `&&`, `|` or inside `$( )`, as written (so `AWS_PROFILE=prod aws ...` is
+  seen) and again without `rtk`, `sudo`, `env`, `timeout` and `VAR=x`, and
+  inside `bash -c` or `pwsh -Command`. A command named in a quoted string, a
+  heredoc or an argument (`echo "git push -f"`) is not run, so it is not
+  matched. `.*` can still run into a quoted argument, which is why the git
+  rules above name the subcommand right after `git`.
+- It sees only the command line: `git push -f` with no branch named, or a
+  profile set by an earlier `export`, is not matched.
+- A secret or a `"block": true` rule denies the call before any ask.
+- Claude Code (tried with 2.1.318 on 2026-11-06, a hook answering "ask" for
+  `echo`): an interactive session in `auto` mode still showed the permission
+  prompt with the reason, and Claude Code's hooks documentation says the
+  auto-mode classifier does not decide such a call. Under `claude -p`, in the
+  default and in `auto` mode and with `--allowedTools Bash`, nobody can answer,
+  so the call was denied and the model got the reason. `bypassPermissions` was
+  not tried.
+- Codex and Antigravity: see their sections above.
 
 ## Optional: a model-based check
 
@@ -434,14 +496,18 @@ on another machine with `--benign-file`.
 - **Fail-open.** A guard error lets the call through and prints
   `coding-agent-guard: internal error ... this call was not checked`.
 - **Notes on outgoing text arrive after the call.** Secrets, personal IDs and
-  `"block": true` rules are the only things stopped beforehand.
+  `"block": true` rules are the only things stopped beforehand; ask rules wait
+  for the user.
 - **Rules see the text a person reads**: the command minus arguments that name
   local files or folders, plus body files. Not the tool's description field,
   and not a commit's code, so a rule never trips on an upload path or a diff.
-- **Read is not filtered**, so Claude can still get a file's exact bytes to
-  edit it.
+- **Read is not redacted**, so Claude can still get a file's exact bytes to
+  edit it. Credential files are refused instead, before they are opened, and
+  so is Grep when its path or glob names one. A Grep over a whole folder is
+  not refused, and its output is not redacted.
 - **Cost:** about 200 ms per checked call when Python is started directly,
-  plus about 100 ms for the `sh` launcher the plugin uses.
+  plus about 100 ms for the `sh` launcher the plugin uses. Read and Grep calls
+  start it too.
 - **Commands count where they run, not where they are mentioned**: after `;`,
   `&&`, `|` or inside `$( )`, behind `rtk`, `sudo`, `env`, `timeout` or `VAR=x`,
   as a path or through PowerShell's `&`, and inside `bash -c` or `pwsh -Command`.
