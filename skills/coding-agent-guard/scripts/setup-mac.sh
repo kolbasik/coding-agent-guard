@@ -156,7 +156,8 @@ if [ -n "$CLAUDE_MODEL" ] || [ -n "$CHAT_MODEL" ] || [ -n "$AGY_MODEL" ]; then
     if [ -n "$OLLAMA_MODEL" ]; then
         # An --ollama model sending the judge everything it scores 0.1 or more replaces the laya:en screen:
         # as many catches at half the false alarms, and a third of our own texts sent to the judge (2026-11-06).
-        set -- "$@" --claude-above 0.5
+        # laya:en still stands in for any text the --ollama model fails on (an outage, a usage limit).
+        set -- "$@" --claude-above 0.5 --screen "$CONFIRM_MODEL" --screen-above 0.5 --screen-fallback
     else
         set -- "$@" --screen "$CONFIRM_MODEL" --screen-above 0.5 --claude-above 0.5
     fi

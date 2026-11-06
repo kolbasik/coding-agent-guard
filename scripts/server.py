@@ -312,18 +312,26 @@ def build_server(args, models, confirmers=(), screens=(), deciders=()):
                 span = getattr(max(models, key=lambda m: scores[m.name]), "span", None)
             if deciders and not pending:
                 pending = ask_deciders(judge_window(text, span))
-            # A screen scores every text but never flags: it only sends suspect text to Claude, which
-            # catches attacks the classifier misses and throws out the screen's many false alarms.
-            for s in screens:
-                try:
-                    scores[SCREEN + s.name] = round(s.score(text), 4)
-                except Exception as e:
-                    scores[f"{SCREEN}{s.name}_error"] = type(e).__name__
+            def run_screens():
+                # A screen never flags: it only sends suspect text to Claude, which catches attacks the
+                # classifier misses and throws out the screen's many false alarms.
+                for s in screens:
+                    try:
+                        scores[SCREEN + s.name] = round(s.score(text), 4)
+                    except Exception as e:
+                        scores[f"{SCREEN}{s.name}_error"] = type(e).__name__
+            # With --screen-fallback the screen stands in only where an --ollama model failed on this text,
+            # so an Ollama outage or usage limit does not leave the classifier alone.
+            fallback = args.screen_fallback and pending
+            if not fallback:
+                run_screens()
             for name, future in pending.items():
                 try:
                     scores[name] = round(future.result(), 4)
                 except Exception as e:
                     scores[f"{name}_error"] = type(e).__name__
+            if fallback and any(f"{name}_error" in scores for name in pending):
+                run_screens()
             # A cascade: the classifiers flag alone when sure; when merely suspect, a second opinion
             # can flag too. Text below --confirm-above never pays for it.
             if confirmers and top(scores) >= args.confirm_above:
@@ -366,6 +374,9 @@ def main():
                     help="Ollaya model scored on every text that never flags itself; at --screen-above it sends "
                          "the text to the Claude judge, e.g. laya:en")
     ap.add_argument("--screen-above", type=float, default=0.5)
+    ap.add_argument("--screen-fallback", action="store_true",
+                    help="run --screen only on text an --ollama model failed to score, e.g. laya:en standing in "
+                         "for clef:cloud during an Ollama outage")
     ap.add_argument("--ollaya-url", default="http://127.0.0.1:11435")
     ap.add_argument("--ollama", action="append", default=[],
                     help="Ollama decision model scored on every text that flags like a classifier, e.g. clef:cloud; "

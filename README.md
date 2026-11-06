@@ -383,7 +383,10 @@ same token in the `CODING_AGENT_GUARD_TOKEN` environment variable.
   0.35+ (`--ollama-url`, default the local Ollama) that flags like a classifier:
   0.9 or more raises a flag, and with a judge, `--ollama-above` (default 0.1)
   sends what it finds suspect to the judge. It runs while the classifier scores
-  and gives up after 3 s. It reads what a judge would (up to 32,000
+  and gives up after 3 s; while it fails, the user gets one line an hour, and
+  with `--screen laya:en --screen-fallback` laya:en screens just the texts it
+  failed on (an outage would otherwise drop AgentInjectionBench catches from
+  142 to 99; laya:en keeps 112). It reads what a judge would (up to 32,000
   characters), anonymized first: secrets and personal IDs redacted, e-mail
   addresses, URL hosts, home folders, IPs, issue keys, phone numbers and
   business IDs replaced, and every `--anonymize <term>` (company or product
@@ -408,7 +411,10 @@ same token in the `CODING_AGENT_GUARD_TOKEN` environment variable.
 
   So clef at 0.1 replaces the laya:en screen: one public catch fewer, one tool
   output catch more, half the public false alarms, and the judge reads a third
-  as many of our texts. Anonymizing cost clef no public catch and 1 of 142
+  as many of our texts. Live on the same 240 texts, the median wait per outside
+  text fell from 0.78 s to 0.40 s, and all 142 AgentInjectionBench injections
+  were confirmed. At 0.05, clef catches 4 more public attacks for 8 more false
+  alarms and twice as many of our texts sent to the judge. Anonymizing cost clef no public catch and 1 of 142
   AgentInjectionBench catches at 0.5 (none at 0.9). clef's training data is not
   published, so AgentInjectionBench may flatter it.
 - `--claude-model claude-sonnet-5` asks a locked-down `claude -p` about text a classifier

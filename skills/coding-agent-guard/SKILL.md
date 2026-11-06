@@ -127,7 +127,9 @@ injections inside tool output) and on the user's own tickets and notes:
   Claude. `setup-mac.sh --ollama-model` installs that. It reads every text
   anonymized (`leaks.anonymize`, plus `--anonymize` terms), but people's names
   and the content still leave the machine; it runs while Horizon-Labs scores and
-  gives up after 3 s, so an Ollama outage shows as `ollama-clef-cloud_error`.
+  gives up after 3 s. While it fails the user gets one line an hour, and
+  `--screen-fallback` lets laya:en screen just those texts (installed by
+  `setup-mac.sh --ollama-model`); the scores show `ollama-clef-cloud_error`.
 - Letting Claude decide what either model finds suspect beats every cascade of
   models alone: the most catches, about the same false alarms. The price is that
   roughly 40–50% of ordinary outside texts wait about 2.5 s for Claude (live log,

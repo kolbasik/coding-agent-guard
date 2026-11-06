@@ -698,22 +698,41 @@ JUDGE_DOWN_STAMP = os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP
 JUDGE_DOWN_EVERY = 3600   # seconds: one line per outage, not one per flag it could not check
 
 
+MODEL_DOWN_STAMP = JUDGE_DOWN_STAMP.replace("judge-down", "model-down")
+
+
+def once_an_hour(stamp):
+    """True at most once per JUDGE_DOWN_EVERY for this stamp file."""
+    try:
+        if time.time() - os.path.getmtime(stamp) < JUDGE_DOWN_EVERY:
+            return False
+    except OSError:
+        pass   # no stamp yet
+    try:
+        with open(stamp, "w"):
+            pass
+    except OSError:
+        return False   # cannot throttle, so stay quiet rather than repeat on every call
+    return True
+
+
+def model_down_notice(finding):
+    """At most one line an hour while an --ollama model fails: outside text is then checked without it."""
+    scores = finding.get("scores") or {}
+    down = sorted(k for k in scores if k.startswith("ollama-") and k.endswith("_error"))
+    if not down or not once_an_hour(MODEL_DOWN_STAMP):
+        return None
+    # The error's type name only, never the scored text.
+    failing = ", ".join(f"{k[:-len('_error')]} ({str(scores[k])[:40]})" for k in down)
+    return f"coding-agent-guard: {failing} is failing; outside text is checked without it until it works again"
+
+
 def judge_down_notice(finding):
     """At most one line an hour while the judge fails, in place of the flags it could not check."""
     judge = next((h[:-len("-judge:unavailable")] for h in finding.get("injection") or []
                   if h.endswith("-judge:unavailable")), None)
-    if not judge:
+    if not judge or not once_an_hour(JUDGE_DOWN_STAMP):
         return None
-    try:
-        if time.time() - os.path.getmtime(JUDGE_DOWN_STAMP) < JUDGE_DOWN_EVERY:
-            return None
-    except OSError:
-        pass   # no stamp yet
-    try:
-        with open(JUDGE_DOWN_STAMP, "w"):
-            pass
-    except OSError:
-        return None   # cannot throttle, so stay quiet rather than repeat on every flag
     # The judge's own error (a CLI or HTTP message), never the judged text.
     error = str((finding.get("scores") or {}).get(f"{judge}_error", ""))[:100]
     return (f"coding-agent-guard: the {judge} judge is failing ({error}); classifier flags reach the model as notes "
@@ -756,7 +775,7 @@ def finish(event, rules, cfg, result, hook_ms=None):
         if record["notified"]:
             report.notify("coding-agent-guard", message)
     else:
-        notice = judge_down_notice(record)
+        notice = judge_down_notice(record) or model_down_notice(record)
         if notice:
             result = {**(result or {}), "systemMessage": notice}
             if cfg["notify"] == "desktop":

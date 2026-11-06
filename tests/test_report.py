@@ -29,6 +29,9 @@ class Setup:
     def fake_model_hits(self, text, classifier):
         if self.model_says is None:
             return []
+        if self.model_says == "ollama-down":
+            classifier.scores = {"fake": 0.1, "ollama-clef-cloud_error": "TimeoutError"}
+            return []
         judged = {"cleared": ({"claude": 0.0}, ["claude-judge:ordinary-data"]),
                   "judge-down": ({"claude_error": "RuntimeError: api_error: weekly limit"}, ["claude-judge:unavailable"])}
         scores, extra = judged.get(self.model_says, ({}, []))
@@ -38,7 +41,8 @@ class Setup:
     def run_output(self, text, tool="WebFetch", url="https://example.com/page"):
         event = {"tool_name": tool, "tool_input": {"url": url}, "tool_response": text, "session_id": "s1"}
         with mock.patch.object(guard, "model_hits", self.fake_model_hits), mock.patch.object(report, "notify") as note, \
-                mock.patch.object(guard, "JUDGE_DOWN_STAMP", os.path.join(self.tmp, "judge-down")):
+                mock.patch.object(guard, "JUDGE_DOWN_STAMP", os.path.join(self.tmp, "judge-down")), \
+                mock.patch.object(guard, "MODEL_DOWN_STAMP", os.path.join(self.tmp, "model-down")):
             result = guard.finish(event, self.rules, self.cfg, guard.on_output(event, self.rules))
         return result, note
 
@@ -82,6 +86,24 @@ class FinishTests(unittest.TestCase):
     def test_judge_down_line_shows_once_an_hour(self):
         # Arrange
         s = Setup(model_says="judge-down")
+        s.run_output("A page body long enough to be scored.")
+        # Act
+        result, note = s.run_output("Another page body long enough to be scored.")
+        # Assert
+        self.assertEqual((note.call_count, "systemMessage" in (result or {})), (0, False))
+
+    def test_failing_ollama_model_tells_the_user(self):
+        # Arrange
+        s = Setup(model_says="ollama-down")
+        # Act
+        result, note = s.run_output("A page body long enough to be scored.")
+        # Assert
+        self.assertEqual((note.call_count, "ollama-clef-cloud (TimeoutError) is failing" in result["systemMessage"]),
+                         (1, True))
+
+    def test_failing_ollama_model_line_shows_once_an_hour(self):
+        # Arrange
+        s = Setup(model_says="ollama-down")
         s.run_output("A page body long enough to be scored.")
         # Act
         result, note = s.run_output("Another page body long enough to be scored.")
