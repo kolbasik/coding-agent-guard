@@ -188,6 +188,10 @@ and says so only on stderr and in the log (`classifier_error`). Check
 `<classifier_url>/health`. On a Mac set up with the script below, restart with
 `launchctl kickstart -k gui/$(id -u)/dev.coding-agent-guard.server` or re-run the script;
 logs are in the repo copy's `.cache/server.log` and `.cache/ollaya.log`.
+`kickstart` keeps the old arguments: after changing the LaunchAgent's plist, re-run
+the script, or `launchctl bootout` and wait until `launchctl print` of the label
+fails before `launchctl bootstrap`. Bootstrapping straight after bootout fails
+with "5: Input/output error" and leaves the server down (2026-11-06, 1 min 47 s).
 `screen:ollaya-laya-en_error` (or `ollaya-laya-en_error`) in the scores means Ollaya is down. A `claude_error`
 saying "Not logged in" means the judge's token expired: the user reruns
 `claude setup-token` on that machine and overwrites the token file.
