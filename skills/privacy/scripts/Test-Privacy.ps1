@@ -148,8 +148,13 @@ function New-Check([string]$Name, [scriptblock]$Test, [scriptblock]$Fix, [string
     [pscustomobject]@{ Name = $Name; Kind = $Kind; Test = $Test; Fix = $Fix; Hint = $Hint; App = $App; Files = $Files; Data = $Data; Installed = $Installed }
 }
 
-function New-JsonCheck([string]$Name, [string]$File, [Collections.IDictionary]$Want, [string]$App, [string]$Marker = (Split-Path $File)) {
-    New-Check $Name -App $App -Files $File -Hint "-Action apply, or edit $File" -Data @{ File = $File; Want = $Want; Marker = $Marker } -Test {
+# -Command: the tool also counts as installed when that command is on PATH, since a Homebrew install lands outside the home.
+function New-JsonCheck([string]$Name, [string]$File, [Collections.IDictionary]$Want, [string]$App, [string]$Marker = (Split-Path $File),
+    [string]$Command, [hashtable]$Tools) {
+    New-Check $Name -App $App -Files $File -Hint "-Action apply, or edit $File" -Data @{ File = $File; Want = $Want; Marker = $Marker; Command = $Command; Tools = $Tools } -Installed {
+        param($c)
+        -not $c.Data.Marker -or (Test-Path -LiteralPath $c.Data.Marker) -or ($c.Data.Command -and (& $c.Data.Tools.Has $c.Data.Command))
+    } -Test {
         param($c)
         $json = Read-JsonFile $c.Data.File
         foreach ($k in $c.Data.Want.Keys) {
@@ -284,7 +289,8 @@ function Get-PrivacyChecks([Parameter(Mandatory)][string]$HomePath, [Parameter(M
     # Installed means the binary, not the settings file: DO_NOT_TRACK covers its telemetry, but its update check is on
     # until settings.json says off, and that file only appears once a setting is changed.
     New-JsonCheck 'terminal-browser' (Join-Path $HomePath '.config/terminal-browser/settings.json') ([ordered]@{
-            'telemetry.usage' = 'off'; 'telemetry.crashReports' = 'off'; 'updates.check' = 'off' }) -Marker (Join-Path $HomePath '.local/bin/terminal-browser')
+            'telemetry.usage' = 'off'; 'telemetry.crashReports' = 'off'; 'updates.check' = 'off' }) -Marker (Join-Path $HomePath '.local/bin/terminal-browser') `
+        -Command 'terminal-browser' -Tools $Tools
     New-JsonCheck 'SourceGit' (Join-Path $support 'SourceGit/preference.json') ([ordered]@{ Check4UpdatesOnStartup = $false }) -App 'SourceGit'
 
     New-Check 'Homebrew analytics' -Data @{ Tools = $Tools } -Hint 'brew analytics off' -Installed { param($c) & $c.Data.Tools.Has 'brew' } -Test {
@@ -332,7 +338,7 @@ function Get-PrivacyChecks([Parameter(Mandatory)][string]$HomePath, [Parameter(M
     # yourself, and software you must leave alone, go in $KnownFile (SKILL.md, "Your own known tools").
     $known = @(
         # Checked above, or covered by an opt-out in opt-outs.zsh.
-        'claude-code*', 'codex', 'codex-code-mode-host', '@google/gemini-cli', 'antigravity-cli', 'agy', 'Antigravity IDE', 'Antigravity', 'zed',
+        'claude-code*', 'codex', 'codex-code-mode-host', '@google/gemini-cli', 'gemini-cli', 'antigravity-cli', 'agy', 'Antigravity IDE', 'Antigravity', 'zed',
         'herdr', 'ghostty', 'obsidian', 'dbeaver*', 'ollama*', 'podman-desktop', 'Podman Desktop', 'terminal-browser', 'sourcegit', 'gh',
         'python3*', 'rtk', 'Orca', 'Parallels Desktop', 'npm', 'dotnet-sdk', 'awscli', 'sops', 'opentofu', 'terraform', 'twg',
         # Assessed clean above, or in SKILL.md's "No off switch exists".

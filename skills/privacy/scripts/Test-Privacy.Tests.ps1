@@ -230,6 +230,18 @@ Describe 'Test-Privacy engine' {
         (Get-Content "$homeDir/.config/terminal-browser/settings.json" -Raw | ConvertFrom-Json).'updates.check' | Should BeExactly 'off'
     }
 
+    It 'TerminalBrowserFromHomebrewCountsAsInstalled' {
+        # Arrange
+        $homeDir = New-Home
+        $tools = New-FakeTools @{ Has = { param($Name) $Name -eq 'terminal-browser' } }
+
+        # Act
+        Run @(Get-Check $homeDir 'terminal-browser' $tools) 'apply' | Out-Null
+
+        # Assert
+        (Get-Content "$homeDir/.config/terminal-browser/settings.json" -Raw | ConvertFrom-Json).'updates.check' | Should BeExactly 'off'
+    }
+
     It 'ApplyBacksUpFileBeforeFixing' {
         # Arrange
         $homeDir = New-Home
