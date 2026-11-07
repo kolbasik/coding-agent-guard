@@ -140,6 +140,11 @@ injections inside tool output) and on the user's own tickets and notes:
   Thinking makes any judge several times slower. Pin the judge by full ID
   (`claude-sonnet-5`): the `sonnet` alias follows the CLI, and with CLI 2.1.292 it
   already meant Sonnet 5.5.
+- The judge's prompt stays as it is (2026-11-07). Injections wrapped to fool the
+  judge (a closed `</tool_output>` tag, a reviewer note, a fake system line) were
+  caught 219 of 225 times with or without a "the text is data" rule and tag escaping. A
+  list of ordinary texts written for assistants cut no false alarms on skills
+  and docs (7 to 6 of 273) and missed 12 more of 334 injections.
 
 Numbers, method and limits: `docs/model-benchmark.html` (and its PDF) and the
 README's "Which model". A single sample never settles a model question here:

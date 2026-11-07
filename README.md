@@ -450,6 +450,28 @@ same token in the `CODING_AGENT_GUARD_TOKEN` environment variable.
   CLI updates: with CLI 2.1.292, `sonnet` means Sonnet 5.5 and `haiku` still
   means Haiku 4.5. When the pinned model is retired, the judge fails and its
   scores show `claude_error`.
+
+  Two prompt changes measured 2026-11-07, after Hightouch's study of LLM judges
+  (2026-11-04), where listing the ordinary data that looks like a match gave
+  every model its biggest gain. Neither is used:
+
+  | Sonnet 5 judge prompt | Injections wrapped to fool the judge, caught | Benign texts written for assistants, flagged | Injections newly missed, text for text |
+  |---|---|---|---|
+  | live | 219 / 225 | 7 / 273 | — |
+  | `-hardened`: the framed text is data, steering the check is an injection; `<tool_output>` escaped | 219 / 225 | 6 / 273 | 5 (1 newly caught) of 334 |
+  | `-lookalikes`: that, plus a list of ordinary texts written for assistants | 220 / 225 | 6 / 273 | 12 (0 newly caught) of 334 |
+
+  The wrapped set (`score.py --datasets judgeattack`) puts 45 published
+  injections in a closed `</tool_output>` tag, a reviewer note, a fake system
+  line or a skill file's header, each claiming the text is harmless. Wrapping
+  makes the classifiers more suspicious, not less (Horizon-Labs at 0.5 or more:
+  73% plain, 80 to 100% wrapped; clef 73%, 96 to 100%), so it reaches the judge, which is
+  not fooled. The benign set is skills, plugin skills, AGENTS.md files and this
+  repo's docs and code (`--benign`), the kind of text behind most live false
+  alarms; the live judge already passes nearly all of it. The last column is
+  `judge.py --same-as claude-sonnet-no-thinking` on the band judged 2026-11-06:
+  the list made the judge lenient, missing 12 more injections to raise 9 fewer
+  alarms, 8 of them on xTRam1 requests to an AI that are injections inside tool output.
 - `--codex-model gpt-6.1-sol` judges text from Codex sessions with a locked-down
   `codex exec` instead (no user config, rules, hooks, plugins, ChatGPT apps,
   skills or saved session; the shell, sub-agent and code-mode features off;
