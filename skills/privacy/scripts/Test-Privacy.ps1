@@ -250,7 +250,12 @@ function Get-PrivacyChecks([Parameter(Mandatory)][string]$HomePath, [Parameter(M
     $gemini = Join-Path $HomePath '.gemini/settings.json'
     New-JsonCheck 'Gemini CLI' $gemini ([ordered]@{
             'privacy/usageStatisticsEnabled' = $false; 'general/enableAutoUpdate' = $false; 'general/enableAutoUpdateNotification' = $false }) -Marker $gemini
-    New-JsonCheck 'Antigravity CLI' (Join-Path $HomePath '.gemini/antigravity-cli/settings.json') ([ordered]@{ enableTelemetry = $false; showFeedbackSurvey = $false })
+    $agyCli = Join-Path $HomePath '.gemini/antigravity-cli'
+    New-JsonCheck 'Antigravity CLI' (Join-Path $agyCli 'settings.json') ([ordered]@{ showFeedbackSurvey = $false })
+    # Its Enable Telemetry has no settings.json key (agy 1.5.3: the field is tagged json:"-"); agy reads it from the
+    # account at each start and drops an enableTelemetry key from the file.
+    New-Check 'Antigravity CLI telemetry' -Kind manual -Data @{ Marker = $agyCli } `
+        -Hint 'account-level, unreadable here; keep /config → Enable Telemetry off in agy (saved with the Google account)'
     New-JsonCheck 'Antigravity IDE' (Join-Path $support 'Antigravity IDE/User/settings.json') ([ordered]@{
             'telemetry.telemetryLevel' = 'off'; 'telemetry.feedback.enabled' = $false; 'update.mode' = 'manual'; 'extensions.autoCheckUpdates' = $false }) `
         -App 'Antigravity IDE' -Marker (Join-Path $support 'Antigravity IDE')

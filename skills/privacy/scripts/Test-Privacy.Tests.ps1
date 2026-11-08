@@ -469,6 +469,45 @@ Describe 'Test-Privacy parsers' {
 }
 
 Describe 'Test-Privacy checks' {
+    It 'AntigravityCliFileAsAgyRewritesItIsOk' {
+        # Arrange
+        $homeDir = New-Home
+        Write-HomeFile $homeDir '.gemini/antigravity-cli/settings.json' '{"colorScheme":"dark","showFeedbackSurvey":false}' | Out-Null
+        $cli = Get-Check $homeDir 'Antigravity CLI'
+
+        # Act
+        $result = Run @($cli)
+
+        # Assert
+        $result.Lines[0] | Should BeExactly 'ok         Antigravity CLI'
+    }
+
+    It 'AntigravityCliApplyWritesNoEnableTelemetry' {
+        # Arrange
+        $homeDir = New-Home
+        $file = Write-HomeFile $homeDir '.gemini/antigravity-cli/settings.json' '{"colorScheme":"dark"}'
+
+        # Act
+        Run @(Get-Check $homeDir 'Antigravity CLI') 'apply' | Out-Null
+
+        # Assert
+        (Read-JsonFile $file).Keys -join '|' | Should BeExactly 'colorScheme|showFeedbackSurvey'
+    }
+
+    It 'AntigravityCliTelemetryIsManualAccountSetting' {
+        # Arrange
+        $homeDir = New-Home
+        New-Item -ItemType Directory (Join-Path $homeDir '.gemini/antigravity-cli') | Out-Null
+        $telemetry = Get-Check $homeDir 'Antigravity CLI telemetry'
+
+        # Act
+        $result = Run @($telemetry)
+
+        # Assert
+        $result.Lines[0] | Should Match '^manual     Antigravity CLI telemetry: account-level.*/config'
+        $result.ExitCode | Should Be 0
+    }
+
     It 'MissingLoginOptOutIsViolation' {
         # Arrange
         $homeDir = New-Home

@@ -77,7 +77,11 @@ shows it as `REVIEW`.
 3. **Record the result.** A switch becomes a check in the script
    (`New-JsonCheck`, `New-TomlCheck`, `New-KeyValueCheck`, or `New-Check` for
    anything else) or an export in `opt-outs.zsh`; a tool with nothing to turn
-   off goes in your known file (§4), with the reason as a comment.
+   off goes in your known file (§4), with the reason as a comment. A config
+   key becomes a check only once the tool is shown to read it: the vendor's
+   settings reference names it, or it is still in the file after the tool's
+   next start. A key the tool drops is no switch; a setting kept with the
+   account is a `manual` line (§7).
 
 ## 4. Your own known tools
 
@@ -124,7 +128,10 @@ The checker reads them but cannot set them: Orca → Settings → Privacy →
 telemetry (PostHog) off, and Parallels → Preferences → General → Check for
 updates and Download updates automatically, both off. The Antigravity app's
 Settings → Account → Enable Telemetry is account-level and unreadable here, so
-it is always a `manual` line while the app is installed.
+it is always a `manual` line while the app is installed. The same goes for the
+Antigravity CLI's `/config` → Enable Telemetry: agy saves it with the Google
+account, not in `settings.json`, and drops an `enableTelemetry` key written
+there on its next start.
 
 ## 8. No off switch exists
 
@@ -139,9 +146,13 @@ it protects.
 
 - **twg kept sending analytics with `DO_NOT_TRACK=true`.** Guard: §5, `1` only.
 - **onnxruntime telemetry missed by a static audit.** Guard: §3, sockets.
-- **agy dropped `enableTelemetry` seconds after it was written**: a running agy
-  saved its in-memory settings over the file, and the report said "off" while
-  telemetry was on for a day. Guard: §5, edit settings only while the app is
-  closed, and re-run §1 after its next launch.
+- **agy dropped `enableTelemetry` seconds after it was written**, and the report
+  said "off" while telemetry was on for a day. First blamed on a running agy
+  saving over the file (§5 still holds for apps that do). The real cause, found
+  on agy 1.5.3: the CLI has no such key. Its Enable Telemetry field is tagged
+  `json:"-"`, read from the Google account at every start, and the key is
+  dropped from the file, so `apply` wrote it back on every run and the check
+  could never pass. Guard: §3 step 3, a key becomes a check only once the tool
+  is shown to keep it; the CLI's switch is now a `manual` line (§7).
 - **`brew cat <formula>` turned Homebrew developer mode on** during research.
   Guard: `brew developer off` after any `brew cat`.
