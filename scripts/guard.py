@@ -3,8 +3,8 @@
   guard.py in    PostToolUse. Strips invisible Unicode, redacts secrets and personal
                  IDs, and flags instruction-like text in output from outside sources.
   guard.py out   PreToolUse. Denies a call that would send a secret or a personal ID
-                 off the machine, and a Read or Grep of a credential file; asks the user
-                 before a command an ask rule names; flags injection and warn-rule hits
+                 off the machine, and a Read or Grep of a credential file; blocks, or asks
+                 the user before, a command an ask rule names; flags injection and warn-rule hits
                  in outgoing text without blocking.
   guard.py scrub  Stop, SubagentStop, StopFailure and SessionEnd. Masks secrets left in the
                  session transcript (a hook's own stdout keeps the raw tool output there).
@@ -263,12 +263,16 @@ def _commands(names):
 
 class _CommandLine:
     """Matches a pattern from the start of each command a command line runs, as written and without its wrappers,
-    so `rtk git push -f`, `bash -c 'git push -f'` and `AWS_PROFILE=prod aws ...` are all seen."""
+    so `rtk git push -f`, `bash -c 'git push -f'` and `AWS_PROFILE=prod aws ...` are all seen. With whole_line, the
+    pattern is searched in the whole line instead, heredoc bodies left out, so `cd x && y` and `$( )` stay in view."""
 
-    def __init__(self, pattern):
+    def __init__(self, pattern, whole_line=False):
         self.rx = re.compile(pattern)
+        self.whole_line = whole_line
 
     def search(self, command):
+        if self.whole_line:
+            return bool(command.strip()) and bool(self.rx.search(_strip_heredocs(command)))
         return any(self.rx.match(s) for s in (*_split(_strip_heredocs(command)), *command_segments(command)))
 
 
@@ -295,7 +299,8 @@ def build_rules(cfg, known):
         credential_files=[(c["name"], re.compile(c["pattern"], re.I)) for c in cfg["credential_files"]],
         allowed_credential_files=re.compile("|".join(cfg["allowed_credential_files"]), re.I)
         if cfg["allowed_credential_files"] else NEVER,
-        ask=[SimpleNamespace(command=_CommandLine(a["pattern"]), message=a.get("message") or f"matches the '{a['name']}' rule")
+        ask=[SimpleNamespace(command=_CommandLine(a["pattern"], bool(a.get("whole_line"))), block=bool(a.get("block")),
+                             message=a.get("message") or f"matches the '{a['name']}' rule")
              for a in cfg["ask_commands"]],
         classifier=SimpleNamespace(url=cfg["classifier_url"], threshold=cfg["classifier_threshold"],
                                    timeout=cfg["classifier_timeout"],
@@ -603,7 +608,7 @@ def _refuse_credential_files(paths, rules, what):
 
 def on_input(event, rules):
     """PreToolUse: deny a credential file read, or when a secret, personal ID or blocking rule hit would leave;
-    ask before a command an ask rule names; else an optional note."""
+    block, or ask before, a command an ask rule names; else an optional note."""
     tool = event.get("tool_name", "")
     data = event.get("tool_input") or {}
     cwd = event.get("cwd") or os.getcwd()
@@ -652,7 +657,12 @@ def on_input(event, rules):
             rules.events.append({"direction": "out", "blocked_rules": stops, "injection": hits})
             return _deny(f"coding-agent-guard: blocked, the text being sent {'; '.join(stops)}. "
                          "Rewrite it without that and send again.")
-    asks = [rule.message for rule in rules.ask if rule.command.search(command)]
+    matched = [rule for rule in rules.ask if rule.command.search(command)]
+    blocks = [rule.message for rule in matched if rule.block]
+    if blocks:
+        rules.events.append({"direction": "out", "blocked_rules": blocks, "warnings": warnings})
+        return _deny(f"coding-agent-guard: blocked, this command {'; '.join(blocks)}.")
+    asks = [rule.message for rule in matched]
     if asks:
         rules.events.append({"direction": "out", "asked": asks, "warnings": warnings})
         reason = f"coding-agent-guard: this command {'; '.join(asks)}, so it needs the user's approval."

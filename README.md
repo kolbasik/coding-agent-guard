@@ -13,7 +13,7 @@ redacting it (see [Antigravity](#antigravity)).
 | | Instruction-like text in output from outside | A note tells Claude it is data |
 | Before a call that leaves the machine | Secrets and personal IDs in the call, the files it uploads, the staged diff of a commit, the commits of a push | Blocked, with the kind named and the value never repeated |
 | | Instruction-like text and your warn rules in text a person will read | A note, or a block for a rule with `"block": true` |
-| | Your ask rules on a shell command line | The user is asked before it runs |
+| | Your ask rules on a shell command line | The user is asked before it runs, or for a rule with `"block": true` the call is denied with the rule's message |
 | Before Read, Grep or a shell command such as `cat` opens a file | Credential files: `.env`, cloud and CLI logins, private keys | Refused, with the kind of file named |
 | When a Claude Code turn, subagent or session ends | Secrets and personal IDs anywhere in the transcript rows written since the last check: another hook's copy of the raw output, a file Read showed, a pasted prompt | Masked in place with `*` of the same length (see [Transcript scrub](#transcript-scrub)) |
 
@@ -191,7 +191,7 @@ are read in that order, and every list extends the built-in one.
 | `secret_env` | Extra environment variable names whose values are secrets |
 | `credential_manager_filters` | Name filters whose values are secrets, e.g. `"myapp/*"`: Windows Credential Manager target names, or on macOS keychain generic-password service names, read through `/usr/bin/security` (so only items that trust it, such as ones it wrote, are read without a prompt; an ssh session cannot read them) |
 | `warn` | `{"name", "pattern", "message"?, "commands"?, "block"?}` rules for outgoing text; `commands` limits a rule to matching commands, `"block": true` denies the call instead of adding a note |
-| `ask_commands` | `{"name", "pattern", "message"?}` rules for shell commands the user must approve first; see [Ask before a command](#ask-before-a-command) |
+| `ask_commands` | `{"name", "pattern", "message"?, "block"?, "whole_line"?}` rules for shell commands the user must approve first; `"block": true` denies the command instead, `"whole_line": true` searches the whole command line rather than each command in it; see [Ask before a command](#ask-before-a-command) |
 | `credential_files` | Extra `{"name", "pattern"}` credential files that Read and Grep refuse; the regex is searched, ignoring case, in the file's absolute path with `/` separators, e.g. `"/\\.vault-token$"` |
 | `allowed_credential_files` | Regexes, matched the same way, for paths to read even though they look like a credential file, such as a test fixture: `"/tests/fixtures/[^/]+\\.pem$"` |
 | `classifier_url` | Base URL of a scoring server (below); empty turns the model check off |
@@ -271,7 +271,18 @@ the rule's message. None ship by default; some to start from:
   rules above name the subcommand right after `git`.
 - It sees only the command line: `git push -f` with no branch named, or a
   profile set by an earlier `export`, is not matched.
-- A secret or a `"block": true` rule denies the call before any ask.
+- `"block": true` denies the command instead of asking, on every host, and the
+  agent gets `coding-agent-guard: blocked, this command <message>.` as the
+  reason. Word the message as what the command does and what to run instead.
+  A block rule wins over an ask rule that matches the same command.
+- `"whole_line": true` searches the pattern anywhere in the whole command line,
+  before it is cut into commands, so it sees what that cut hides: `cd x && y`,
+  `$( )` and backticks, and a glob in a command after a `cd`. Heredoc bodies
+  are still left out. Nothing else is parsed: anchor the pattern at a command
+  start yourself, as `(?:^|[;&|\n]\s*)` does, and expect a quoted string that
+  holds a `;` or `&&` (`echo "a; cd x && y"`) to match. Wrappers (`sudo`,
+  `rtk`) are not dropped either; name the ones you need in the pattern.
+- A secret or a `"block": true` rule on outgoing text denies the call before any ask.
 - Claude Code (tried with 2.1.318 on 2026-11-06, a hook answering "ask" for
   `echo`): an interactive session in `auto` mode still showed the permission
   prompt with the reason, and Claude Code's hooks documentation says the
@@ -280,6 +291,15 @@ the rule's message. None ship by default; some to start from:
   so the call was denied and the model got the reason. `bypassPermissions` was
   not tried.
 - Codex and Antigravity: see their sections above.
+
+A rule that blocks a `cd` chained with another command, matched on the whole
+line:
+
+```json
+{ "name": "cd-compound", "whole_line": true, "block": true,
+  "pattern": "(?:^|[;&|({\\n]\\s*)cd\\s+[^;&|\\n]*?(?:&&|;)",
+  "message": "chains cd with another command: give absolute paths or use the tool's own directory option, such as git -C" }
+```
 
 ## Optional: a model-based check
 

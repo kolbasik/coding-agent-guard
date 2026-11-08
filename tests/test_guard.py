@@ -538,6 +538,7 @@ class ShellReadTests(unittest.TestCase):
 
 GIT_RESET = {"name": "reset-hard", "pattern": r"git\s+(?:-C\s+\S+\s+)?reset\b.*\s--hard\b", "message": "discards uncommitted changes"}
 AWS_PROD = {"name": "aws-prod", "pattern": r"AWS_PROFILE=\S*prod|aws\b.*--profile[\s=]+\S*prod"}
+CD_COMPOUND = {"name": "cd-compound", "pattern": r"cd\s+\S+\s*(?:&&|;)", "message": "chains cd with a command"}
 
 
 class AskTests(unittest.TestCase):
@@ -600,6 +601,65 @@ class AskTests(unittest.TestCase):
         guard.on_input(bash_call("git reset --hard"), r)
         # Assert
         self.assertEqual(r.events[0]["asked"], ["discards uncommitted changes"])
+
+    def test_block_rule_denies_with_its_message(self):
+        # Arrange
+        event = bash_call("git reset --hard HEAD~1")
+        # Act
+        result = guard.on_input(event, rules(ask_commands=[{**GIT_RESET, "block": True}]))
+        # Assert
+        self.assertEqual((decision(result), "discards uncommitted changes" in reason(result)), ("deny", True))
+
+    def test_block_rule_wins_over_ask_rule(self):
+        # Arrange
+        event = bash_call("AWS_PROFILE=prod git reset --hard")
+        # Act
+        result = guard.on_input(event, rules(ask_commands=[AWS_PROD, {**GIT_RESET, "block": True}]))
+        # Assert
+        self.assertEqual((decision(result), "'aws-prod' rule" in reason(result)), ("deny", False))
+
+    def test_block_is_recorded_for_the_log(self):
+        # Arrange
+        r = rules(ask_commands=[{**GIT_RESET, "block": True}])
+        # Act
+        guard.on_input(bash_call("git reset --hard"), r)
+        # Assert
+        self.assertEqual((r.events[0].get("blocked_rules"), "asked" in r.events[0]),
+                         (["discards uncommitted changes"], False))
+
+    def test_rule_matches_each_command_alone_by_default(self):
+        # Arrange
+        event = bash_call("cd /repo && git status")
+        # Act
+        result = guard.on_input(event, rules(ask_commands=[CD_COMPOUND]))
+        # Assert
+        self.assertIsNone(result)
+
+    def test_whole_line_rule_sees_operators_and_substitutions(self):
+        # Arrange
+        commands = ["cd /repo && git status", "cd /repo; rm *.log", "mv $(ls x) y", "rm `cat list`"]
+        cfg = [{**CD_COMPOUND, "whole_line": True},
+               {"name": "substitution", "pattern": r"(?:^|[;&|]\s*)(?:rm|mv)\s[^;&|]*(?:\$\(|`)", "whole_line": True}]
+        # Act
+        missed = [c for c in commands if decision(guard.on_input(bash_call(c), rules(ask_commands=cfg))) != "ask"]
+        # Assert
+        self.assertEqual(missed, [])
+
+    def test_whole_line_rule_skips_heredoc_bodies(self):
+        # Arrange
+        event = bash_call("cat > /tmp/clean.zsh <<'EOF'\ncd /repo && rm *.log\nEOF")
+        # Act
+        result = guard.on_input(event, rules(ask_commands=[{**CD_COMPOUND, "whole_line": True}]))
+        # Assert
+        self.assertIsNone(result)
+
+    def test_whole_line_rule_ignores_calls_without_a_command(self):
+        # Arrange
+        event = {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com"}}
+        # Act
+        result = guard.on_input(event, rules(ask_commands=[{"name": "any", "pattern": "", "whole_line": True}]))
+        # Assert
+        self.assertIsNone(result)
 
 
 class CommandMatchingTests(unittest.TestCase):

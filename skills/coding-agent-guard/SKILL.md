@@ -37,6 +37,13 @@ first; when the call comes back denied, the user said no or nobody could answer
 what you wanted to run and why. Under Codex the call is always blocked, as
 Codex cannot ask; the user runs the command themselves.
 
+## "coding-agent-guard: blocked, this command ..."
+
+A command rule the user set to block matched; nobody was asked. The message
+says what the command did and, usually, what to run instead. Do what it says,
+in the form it names. Do not dodge the pattern with a command that does the
+same thing another way; if the rule seems wrong for this command, tell the user.
+
 ## "... secret value(s) ... that Codex could not hide from you"
 
 Under Codex the hook cannot replace tool output, so the secret is in your
