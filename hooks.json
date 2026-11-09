@@ -14,6 +14,10 @@
       {
         "matcher": "run_command|read_url_content|search_web|call_mcp_tool|grep_search",
         "hooks": [{ "type": "command", "command": "sh ./scripts/run agy-in", "timeout": 60 }]
+      },
+      {
+        "matcher": "view_file",
+        "hooks": [{ "type": "command", "command": "sh ./scripts/run agy-read-in", "timeout": 60 }]
       }
     ],
     "PreInvocation": [

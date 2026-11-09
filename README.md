@@ -11,6 +11,7 @@ redacting it (see [Antigravity](#antigravity)).
 | After a shell, Grep, web or MCP tool runs | Secrets and personal IDs | Redacted before Claude sees the output |
 | | Invisible Unicode (zero-width, bidi, tag characters) | Removed |
 | | Instruction-like text in output from outside | A note tells Claude it is data |
+| After a Read, Grep or shell read of a file from outside: Downloads, temp folders, mail (see `external_files`) | Instruction-like text | A note tells Claude it is data; what Read showed is left as it was |
 | Before a call that leaves the machine | Secrets and personal IDs in the call, the files it uploads, the staged diff of a commit, the commits of a push | Blocked, with the kind named and the value never repeated |
 | | Instruction-like text and your warn rules in text a person will read | A note, or a block for a rule with `"block": true` |
 | | Your ask rules on a shell command line | The user is asked before it runs, or for a rule with `"block": true` the call is denied with the rule's message |
@@ -100,7 +101,7 @@ what differs there.
 
 To run it without installing, clone it
 (`git clone https://github.com/kolbasik/coding-agent-guard.git`) and register
-`scripts/guard.py in` as a `PostToolUse` hook, `scripts/guard.py out` as a
+`scripts/guard.py in` as a `PostToolUse` hook (`read-in` for Read), `scripts/guard.py out` as a
 `PreToolUse` hook and `scripts/guard.py scrub` as a `Stop`, `SubagentStop`,
 `StopFailure` and `SessionEnd` hook, with the matchers from `hooks/hooks.json`.
 
@@ -133,7 +134,9 @@ project settings are found from the session's working folder.
 
 Codex has no file-reading tool of its own: it reads files through the shell,
 so the guard refuses a shell command that reads a credential file (`cat .env`,
-`source .env`) before it runs, as on every host. Codex treats a hook's "ask" as a failed hook and
+`source .env`) before it runs, as on every host, and checks what a shell read
+of an [`external_files`](#configure) file prints for instruction-like text, as
+it does under Claude Code. Codex treats a hook's "ask" as a failed hook and
 runs the call, so an [ask rule](#ask-before-a-command) blocks under Codex
 instead, with the same reason; the user runs the command themselves.
 
@@ -163,7 +166,9 @@ it, so under `agy` the guard does what they allow (measured with agy 1.3.3 on
   output holding a secret is withheld whole, as command output is (agy 1.4.7
   saves it as a step file the hook reads); and an ask rule answers
   `force_ask`, which agy's own hook documentation (agy 1.4.7) says prompts even
-  for a command the user chose to always allow.
+  for a command the user chose to always allow. A `view_file` of an
+  `external_files` file is checked for instruction-like text as Read is, if agy
+  saves what it showed as a step file.
 - agy blocks a call, or drops its output, when a hook fails or times out, so
   under agy the guard lets the call through on an internal error.
 - The [transcript scrub](#transcript-scrub) does not run under agy: it has no
@@ -194,6 +199,7 @@ are read in that order, and every list extends the built-in one.
 | `ask_commands` | `{"name", "pattern", "message"?, "block"?, "whole_line"?}` rules for shell commands the user must approve first; `"block": true` denies the command instead, `"whole_line": true` searches the whole command line rather than each command in it; see [Ask before a command](#ask-before-a-command) |
 | `credential_files` | Extra `{"name", "pattern"}` credential files that Read and Grep refuse; the regex is searched, ignoring case, in the file's absolute path with `/` separators, e.g. `"/\\.vault-token$"` |
 | `allowed_credential_files` | Regexes, matched the same way, for paths to read even though they look like a credential file, such as a test fixture: `"/tests/fixtures/[^/]+\\.pem$"` |
+| `external_files` | Regexes, matched the same way, for files whose text came from outside, so a Read, Grep or shell read (`cat`, `head`, `grep` ...) of one is checked for instruction-like text like web output, added to your Downloads folder, `/tmp`, `/var/tmp` and the macOS and Windows temp folders (where Claude Code keeps its scratchpad), Apple Mail's folders, and `.eml`, `.emlx`, `.msg` and `.mbox` files anywhere. Read output is checked, never changed. Add a folder you save tickets, diffs or attachments to: `"^/srv/inbox/"` |
 | `classifier_url` | Base URL of a scoring server (below); empty turns the model check off |
 | `classifier_threshold` | Score at or above which a model flags the output; default `0.9` |
 | `classifier_timeout` | Seconds to wait for the server before falling back to patterns; default `5`. Keep it at 40 or less: the output hook is stopped after 60 s, and a stopped hook drops its redactions too |
@@ -674,7 +680,9 @@ check the masked transcripts, then delete it. A dry run over 1,424 transcripts
   edit it. Credential files are refused instead, before they are opened, and
   so is Grep when its path or glob names one. Grep's output is redacted like a
   command's, since edits take Read's bytes; a Grep over a whole folder is not
-  refused, but what it prints is redacted.
+  refused, but what it prints is redacted. What Read shows of an
+  `external_files` file is checked for instruction-like text, and left as it
+  was; a Read of any other file is not checked.
 - **Cost:** about 200 ms per checked call when Python is started directly,
   plus about 100 ms for the `sh` launcher the plugin uses. A Read or Grep
   that cannot name a credential file is answered by the launcher without
@@ -683,6 +691,11 @@ check the masked transcripts, then delete it. A dry run over 1,424 transcripts
   sets `credential_files` or `allowed_credential_files`; anything unsure goes
   to Python. Median of 20 Read calls on an Apple silicon Mac with uv
   (2026-11-06): 14 ms answered by the launcher, against 40 ms through Python.
+  After a Read, the launcher answers the same way when the file cannot be
+  outside text: no word of a built-in `external_files` folder in its path and
+  no settings file setting `external_files`. A Read of outside text costs what
+  any outside output does, including the judge's seconds when a model finds it
+  suspect.
 - **Commands count where they run, not where they are mentioned**: after `;`,
   `&&`, `|` or inside `$( )`, behind `rtk`, `sudo`, `env`, `timeout` or `VAR=x`,
   as a path or through PowerShell's `&`, and inside `bash -c` or `pwsh -Command`.

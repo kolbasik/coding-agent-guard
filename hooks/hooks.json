@@ -21,6 +21,12 @@
         "hooks": [
           { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" in", "timeout": 60 }
         ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" read-in", "timeout": 60 }
+        ]
       }
     ],
     "Stop": [

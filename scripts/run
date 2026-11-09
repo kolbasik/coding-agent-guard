@@ -50,6 +50,31 @@ json_string() {
 # Anything unsure goes to Python.
 reads_no_credentials() {
   case $input in *'"glob"'*|*'"Includes"'*) return 1 ;; esac
+  settings_lack credential_files || return 1
+  read_path || return 1
+  [ -n "$p" ] || return 0   # no path and no glob: guard.py checks nothing either
+  case $where in
+    *.env*|*credentials*|*cache*|*hosts.yml*|*netrc*|*.pem*|*.p12*|*.pfx*|*id_*|*auth.json*|*oauth_creds*|\
+    *.docker*|*.kube*|*pypirc*|*pgpass*|*gcloud*) return 1 ;;
+  esac
+}
+
+# True when what a Read (agy: view_file) showed cannot be outside text, so it needs no check and Python is not
+# started: no settings file sets external_files, and neither the path nor the folder it really sits in (symlinks
+# resolved) holds a word that every built-in external_files entry in guard.py matches. Keep the words in step with
+# external_files there; a test checks one path per entry. Anything unsure goes to Python.
+reads_nothing_outside() {
+  settings_lack external_files || return 1
+  read_path || return 1
+  [ -n "$p" ] || return 0
+  case $where in
+    */downloads/*|*/tmp/*|*/var/folders/*|*/temp/*|*/library/mail/*|*/com.apple.mail/*|\
+    *.eml/*|*.emlx/*|*.msg/*|*.mbox/*) return 1 ;;
+  esac
+}
+
+# False when a settings file, the user's or the project's, names $1.
+settings_lack() {
   project=${CLAUDE_PROJECT_DIR:-}
   if [ -z "$project" ]; then   # as guard.py finds it: agy's workspace, else the event's cwd
     json_string workspacePaths
@@ -63,30 +88,38 @@ reads_no_credentials() {
     settings=$home/.claude/coding-agent-guard/settings.json
     [ -n "$home" ] && [ -f "$settings" ] || continue
     while IFS= read -r line || [ -n "$line" ]; do
-      case $line in *credential_files*) return 1 ;; esac
+      case $line in *"$1"*) return 1 ;; esac
     done < "$settings"
   done
+}
+
+# The path a Read or Grep names (agy: view_file, grep_search) as $p, joined to the event's cwd when relative, and as
+# $where that path and the folder it really sits in, each with a / after it, lowercased. False when unsure; $p is
+# empty when the call names no path.
+read_path() {
   json_string file_path
   for key in path AbsolutePath SearchPath; do [ -n "$v" ] || json_string "$key"; done
   p=$v
   case $p in
-    '') return 0 ;;   # no path and no glob: guard.py checks nothing either
+    '') return 0 ;;
     '?'|'~'*) return 1 ;;
     /*|[A-Za-z]:/*) ;;
     *) json_string cwd; case $v in ''|'?'|'~'*) return 1 ;; esac; p=$v/$p ;;
   esac
   [ -L "$p" ] && return 1
   real=$(cd -P "${p%/*}/" 2>/dev/null && pwd -P) || return 1
-  case $(printf '%s\n%s' "$p" "$real" | tr '[:upper:]' '[:lower:]') in
-    *.env*|*credentials*|*cache*|*hosts.yml*|*netrc*|*.pem*|*.p12*|*.pfx*|*id_*|*auth.json*|*oauth_creds*|\
-    *.docker*|*.kube*|*pypirc*|*pgpass*|*gcloud*) return 1 ;;
-  esac
+  where=$(printf '%s/\n%s/' "$p" "$real" | tr '[:upper:]' '[:lower:]')
 }
 
 case "$1" in
   read|agy-read)
     input=$(cat)
     reads_no_credentials && exit 0
+    printf '%s' "$input" | start "$@"
+    exit ;;
+  read-in|agy-read-in)
+    input=$(cat)
+    reads_nothing_outside && exit 0
     printf '%s' "$input" | start "$@"
     exit ;;
 esac

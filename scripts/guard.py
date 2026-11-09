@@ -2,6 +2,9 @@
 
   guard.py in    PostToolUse. Strips invisible Unicode, redacts secrets and personal
                  IDs, and flags instruction-like text in output from outside sources.
+  guard.py read-in
+                 PostToolUse for Read. Flags instruction-like text in a file whose text came from
+                 outside (external_files); never rewrites what Read showed.
   guard.py out   PreToolUse. Denies a call that would send a secret or a personal ID
                  off the machine, and a Read or Grep of a credential file; blocks, or asks
                  the user before, a command an ask rule names; flags injection and warn-rule hits
@@ -35,6 +38,7 @@ import transcript
 
 SHELLS = ("Bash", "PowerShell")
 FILE_TOOLS = ("Read", "Grep")   # read local files into the conversation; only credential files are refused
+HOME = os.path.expanduser("~").replace("\\", "/")
 
 # Every list here is extended, never replaced, by the config files.
 DEFAULTS = {
@@ -71,6 +75,17 @@ DEFAULTS = {
         ("gcloud-login", r"(?:^|/)gcloud/(?:application_default_credentials\.json|credentials\.db|access_tokens\.db)$"),
     )],
     "allowed_credential_files": [],
+    # Files whose text came from outside, so a Read or shell read of one is checked for injection like web output:
+    # a regex searched, case-insensitively, in the absolute path with / separators. Downloads, mail, and the temp
+    # folders where agents keep scratch files and fetched content (Claude Code's scratchpad is /tmp/claude-<uid>).
+    "external_files": [
+        re.escape(HOME) + r"/Downloads(?:/|$)",
+        r"^/(?:private/)?(?:var/)?tmp(?:/|$)",
+        r"^/(?:private/)?var/folders/[^/]+/[^/]+/T(?:/|$)",   # macOS $TMPDIR
+        r"/AppData/Local/Temp(?:/|$)",   # Windows %TEMP%
+        re.escape(HOME) + r"/Library/(?:Mail|Containers/com\.apple\.mail)(?:/|$)",
+        r"\.(?:eml|emlx|msg|mbox)$",
+    ],
     # Shell commands the user must approve before they run.
     "ask_commands": [],
     # Optional scoring server (scripts/server.py); these replace rather than extend.
@@ -299,6 +314,7 @@ def build_rules(cfg, known):
         credential_files=[(c["name"], re.compile(c["pattern"], re.I)) for c in cfg["credential_files"]],
         allowed_credential_files=re.compile("|".join(cfg["allowed_credential_files"]), re.I)
         if cfg["allowed_credential_files"] else NEVER,
+        external_files=re.compile("|".join(cfg["external_files"]), re.I) if cfg["external_files"] else NEVER,
         ask=[SimpleNamespace(command=_CommandLine(a["pattern"], bool(a.get("whole_line"))), block=bool(a.get("block")),
                              message=a.get("message") or f"matches the '{a['name']}' rule")
              for a in cfg["ask_commands"]],
@@ -375,6 +391,28 @@ def _leaves_machine(tool, rules):
     return tool not in SHELLS and not rules.local_tools.match(tool)
 
 
+def read_content(response):
+    """The text a Read showed: a text file's content, or agy's step output; None for an image, a PDF or a file
+    unchanged since its last Read."""
+    if isinstance(response, str):
+        return response
+    file = response.get("file") if isinstance(response, dict) else None
+    # shortcut: a notebook's cells are not read; add them if notebooks from outside turn up
+    content = file.get("content") if isinstance(file, dict) else None
+    return content if isinstance(content, str) else None
+
+
+def reads_outside_file(event, rules):
+    """True when a Read, Grep or shell command reads a file whose text came from outside: one external_files names,
+    itself or through a symlink."""
+    tool, data = event.get("tool_name", ""), event.get("tool_input") or {}
+    cwd = event.get("cwd") or os.getcwd()
+    paths = (read_paths(data, cwd) if tool in FILE_TOOLS
+             else shell_read_paths(data.get("command", ""), cwd) if tool in SHELLS else [])
+    return any(rules.external_files.search(p.replace("\\", "/"))
+               for path in paths for p in dict.fromkeys((path, os.path.realpath(path))))
+
+
 def on_output(event, rules):
     """PostToolUse: the cleaned tool output plus a note for Claude, or None."""
     response = event.get("tool_response")
@@ -386,8 +424,15 @@ def on_output(event, rules):
     # Antigravity cannot replace it either, but it can withhold the whole output, so a secret never does.
     codex, agy = "turn_id" in event, bool(event.get("agy"))
     rules.classifier.agent = "codex" if codex else "agy" if agy else "claude"
-    # Anything but a shell or a local file search is web, MCP or API content, even from a tool whose input stays local.
-    external = tool not in SHELLS + FILE_TOOLS or bool(rules.external.search(command))
+    # Anything but a shell or a local file search is web, MCP or API content, even from a tool whose input stays local;
+    # so is a file a shell or file tool reads when its text came from outside.
+    external = tool not in SHELLS + FILE_TOOLS or bool(rules.external.search(command)) or reads_outside_file(event, rules)
+    # Read is checked only for outside text, and never rewritten: Edit needs a file's exact bytes from it.
+    read = tool == "Read"
+    if read:
+        response = read_content(response) if external else None
+        if response is None:
+            return None
     kinds, hits = [], []
 
     def fn(s):
@@ -397,7 +442,9 @@ def on_output(event, rules):
         kinds.extend(found)
         return cleaned
 
-    updated = walk(response, fn)
+    updated = walk(response, fn)   # for Read, only what the scoring server and the log get
+    if read:
+        kinds = []   # the model saw the file as it is, so there is no redaction to tell it about
     rules.call = {"direction": "in", "external": external, "log": True}
     if external:
         # Send the redacted text: the server is local, but a secret still has no reason to travel.
@@ -426,7 +473,7 @@ def on_output(event, rules):
     if agy:
         return {"withhold": notes[0]} if kinds else {"note": "\n".join(notes)} if notes else None
     out = {}
-    if updated != response and not codex:
+    if updated != response and not codex and not read:
         out["updatedToolOutput"] = updated
     if notes:
         out["additionalContext"] = "\n".join(notes)
@@ -693,6 +740,9 @@ def context(event):
     if isinstance(data.get("url"), str):
         import urllib.parse
         ctx["host"] = urllib.parse.urlsplit(data["url"]).hostname
+    path = data.get("file_path") or data.get("path") if tool in FILE_TOOLS else None
+    if isinstance(path, str):
+        ctx["file"] = path
     return ctx
 
 
@@ -750,7 +800,7 @@ def judge_down_notice(finding):
 
 
 def headline(finding):
-    where = finding.get("host") or ", ".join(finding.get("jira") or finding.get("programs") or [finding["tool"]])
+    where = finding.get("host") or finding.get("file") or ", ".join(finding.get("jira") or finding.get("programs") or [finding["tool"]])
     if finding.get("blocked"):
         return f"coding-agent-guard blocked {finding['tool']} from sending {', '.join(finding['blocked'])} ({where})"
     if finding.get("exposed"):
@@ -995,11 +1045,13 @@ def main():
     if mode == "sweep":   # run by a person, with arguments instead of a hook event on stdin
         sweep(sys.argv[2:])
         return
-    # read and agy-read are out for file reads, which scripts/run answers itself when they cannot name a credential file
-    handler = {"in": on_output, "out": on_input, "read": on_input,
-               "agy-in": on_output, "agy-out": on_input, "agy-read": on_input}.get(mode)
+    # read and agy-read are out for file reads, which scripts/run answers itself when they cannot name a credential
+    # file; read-in and agy-read-in are in for what a Read showed, answered there when it cannot be outside text
+    handler = {"in": on_output, "out": on_input, "read": on_input, "read-in": on_output,
+               "agy-in": on_output, "agy-out": on_input, "agy-read": on_input, "agy-read-in": on_output}.get(mode)
     if handler is None and mode not in ("agy-warn", "scrub"):
-        sys.stderr.write("usage: guard.py in|out|read|scrub|agy-in|agy-out|agy-read|agy-warn < hook-event.json\n"
+        sys.stderr.write("usage: guard.py in|out|read|read-in|scrub|agy-in|agy-out|agy-read|agy-read-in|agy-warn "
+                         "< hook-event.json\n"
                          "       guard.py sweep [--mask [--backup DIR]] [PATH ...]\n")
         sys.exit(1)
     event = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
@@ -1012,7 +1064,7 @@ def main():
     raw = event
     if mode.startswith("agy-"):
         event = from_agy(raw)
-        if mode == "agy-in":
+        if mode in ("agy-in", "agy-read-in"):
             event["tool_response"] = agy_output(raw)
         if not os.environ.get("CLAUDE_PROJECT_DIR") and raw.get("workspacePaths"):
             os.environ["CLAUDE_PROJECT_DIR"] = raw["workspacePaths"][0]
