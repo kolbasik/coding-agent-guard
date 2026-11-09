@@ -10,6 +10,9 @@ import unittest
 from unittest import mock
 
 SCRIPTS = os.path.join(os.path.dirname(__file__), "..", "scripts")
+REPO = os.path.dirname(os.path.abspath(SCRIPTS))
+# The launcher hands any path under a temp folder to Python, so its read-in tests need a folder outside one.
+REPO_IN_TEMP = bool(re.search(r"/(?:tmp|temp|downloads)/|/var/folders/", REPO.replace("\\", "/").lower() + "/"))
 sys.path.insert(0, SCRIPTS)
 import guard  # noqa: E402
 
@@ -636,6 +639,38 @@ class OutsideFileTests(unittest.TestCase):
         # Assert
         self.assertIn(f"Read output from {path}", result["systemMessage"])
 
+    def test_file_an_outside_command_wrote_counts_as_outside_text_in_its_session(self):
+        # Arrange
+        with tempfile.TemporaryDirectory() as state, mock.patch.object(guard, "OUTSIDE_WRITES", state):
+            guard.on_output({**bash_output("diff --git a/x b/x", command="gh pr diff 7 > notes/pr.diff"),
+                             "cwd": "/repo", "session_id": "s1"}, rules())
+            reads = [{**read_call("/repo/notes/pr.diff", cwd="/repo"), "session_id": sid} for sid in ("s1", "s2")]
+            # Act
+            outside = [guard.reads_outside_file(event, rules()) for event in reads]
+        # Assert
+        self.assertEqual(outside, [True, False])
+
+    def test_local_command_writes_are_not_remembered(self):
+        # Arrange
+        event = {**bash_output("", command="echo notes > notes/todo.md"), "cwd": "/repo", "session_id": "s1"}
+        with tempfile.TemporaryDirectory() as state, mock.patch.object(guard, "OUTSIDE_WRITES", state):
+            # Act
+            guard.on_output(event, rules())
+            listed = os.listdir(state)
+        # Assert
+        self.assertEqual(listed, [])
+
+    def test_writes_are_found_in_redirects_tee_and_download_options(self):
+        # Arrange
+        commands = ["gh pr diff 7 > a.diff", "gh api x >>b.json", "curl -s -o c.html https://example.com",
+                    "curl --output=d.bin https://example.com", "wget -O e.zip https://example.com",
+                    "gh issue view 1 | tee -a f.md", "iwr https://example.com -OutFile g.htm",
+                    "gh pr view 1 2>&1 > h.txt", "curl https://example.com > /dev/null", "gh pr list 2> /dev/null"]
+        # Act
+        written = [os.path.basename(p) for c in commands for p in guard.shell_write_paths(c, "/repo")]
+        # Assert
+        self.assertEqual(written, ["a.diff", "b.json", "c.html", "d.bin", "e.zip", "f.md", "g.htm", "h.txt"])
+
 
 GIT_RESET = {"name": "reset-hard", "pattern": r"git\s+(?:-C\s+\S+\s+)?reset\b.*\s--hard\b", "message": "discards uncommitted changes"}
 AWS_PROD = {"name": "aws-prod", "pattern": r"AWS_PROFILE=\S*prod|aws\b.*--profile[\s=]+\S*prod"}
@@ -1075,10 +1110,11 @@ class HookProcessTests(unittest.TestCase):
         # Assert
         self.assertEqual(started, [False, True, True])
 
-    @unittest.skipUnless(shutil.which("sh") and os.name != "nt", "needs sh")
+    @unittest.skipUnless(shutil.which("sh") and os.name != "nt" and not REPO_IN_TEMP,
+                         "needs sh, and the repo outside a temp folder")
     def test_launcher_hands_every_built_in_outside_location_to_python(self):
         # Arrange: a folder in the repo, since the system temp folder is itself an outside location
-        with tempfile.TemporaryDirectory(dir=os.path.dirname(os.path.abspath(SCRIPTS)), prefix="guard-test-") as tmp:
+        with tempfile.TemporaryDirectory(dir=REPO, prefix="guard-test-") as tmp:
             run = self.fake_launcher(tmp)
             paths = {**{kind: launcher for kind, (_, launcher) in OUTSIDE_SAMPLES.items()}, "plain": "r/src/app.ts"}
             for path in paths.values():
@@ -1089,10 +1125,11 @@ class HookProcessTests(unittest.TestCase):
         # Assert
         self.assertEqual(started, sorted(OUTSIDE_SAMPLES))
 
-    @unittest.skipUnless(shutil.which("sh") and os.name != "nt", "needs sh")
+    @unittest.skipUnless(shutil.which("sh") and os.name != "nt" and not REPO_IN_TEMP,
+                         "needs sh, and the repo outside a temp folder")
     def test_launcher_hands_reads_to_python_when_settings_add_external_files(self):
         # Arrange
-        with tempfile.TemporaryDirectory(dir=os.path.dirname(os.path.abspath(SCRIPTS)), prefix="guard-test-") as tmp:
+        with tempfile.TemporaryDirectory(dir=REPO, prefix="guard-test-") as tmp:
             run = self.fake_launcher(tmp)
             os.makedirs(os.path.join(tmp, ".claude", "coding-agent-guard"))
             with open(os.path.join(tmp, ".claude", "coding-agent-guard", "settings.json"), "w") as f:
@@ -1102,6 +1139,21 @@ class HookProcessTests(unittest.TestCase):
             output = self.launch(run, event, tmp, mode="read-in")
         # Assert
         self.assertEqual(output, "PY:" + event)
+
+    @unittest.skipUnless(shutil.which("sh") and os.name != "nt" and not REPO_IN_TEMP,
+                         "needs sh, and the repo outside a temp folder")
+    def test_launcher_hands_reads_to_python_when_the_session_has_outside_writes(self):
+        # Arrange
+        with tempfile.TemporaryDirectory(dir=REPO, prefix="guard-test-") as tmp:
+            run = self.fake_launcher(tmp)
+            os.makedirs(os.path.join(tmp, ".claude", "coding-agent-guard", "outside-writes"))
+            open(os.path.join(tmp, ".claude", "coding-agent-guard", "outside-writes", "s1.txt"), "w").close()
+            events = [json.dumps({**read_call(os.path.join(tmp, "app.ts"), cwd=tmp), "session_id": sid})
+                      for sid in ("s1", "s2")]
+            # Act
+            started = [bool(self.launch(run, event, tmp, mode="read-in")) for event in events]
+        # Assert
+        self.assertEqual(started, [True, False])
 
     @unittest.skipUnless(shutil.which("git"), "needs git")
     def test_every_shell_script_checks_out_with_lf(self):

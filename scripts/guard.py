@@ -404,13 +404,73 @@ def read_content(response):
 
 def reads_outside_file(event, rules):
     """True when a Read, Grep or shell command reads a file whose text came from outside: one external_files names,
-    itself or through a symlink."""
+    itself or through a symlink, or one an outside command of this session wrote."""
     tool, data = event.get("tool_name", ""), event.get("tool_input") or {}
     cwd = event.get("cwd") or os.getcwd()
     paths = (read_paths(data, cwd) if tool in FILE_TOOLS
              else shell_read_paths(data.get("command", ""), cwd) if tool in SHELLS else [])
-    return any(rules.external_files.search(p.replace("\\", "/"))
+    written = written_by_outside(event.get("session_id")) if paths else set()
+    return any(rules.external_files.search(p.replace("\\", "/")) or p in written
                for path in paths for p in dict.fromkeys((path, os.path.realpath(path))))
+
+
+# One file per session listing what its outside commands wrote.
+# shortcut: never pruned, a few lines per session; delete the folder to start over
+OUTSIDE_WRITES = os.path.join(os.path.expanduser("~"), ".claude", "coding-agent-guard", "outside-writes")
+
+
+def _writes_list(session):
+    """Where a session's list is; None for a missing or odd session id."""
+    if not isinstance(session, str) or not re.fullmatch(r"[\w-]+", session):
+        return None
+    return os.path.join(OUTSIDE_WRITES, session + ".txt")
+
+
+def written_by_outside(session):
+    """The real paths of the files this session's outside commands wrote."""
+    try:
+        with open(_writes_list(session), encoding="utf-8") as f:
+            return set(f.read().splitlines())
+    except (OSError, TypeError):   # no list yet, or no session id
+        return set()
+
+
+def remember_writes(session, paths):
+    """List the files an outside command wrote, so reading one later in the session counts as outside text."""
+    path = _writes_list(session)
+    if path and paths:
+        os.makedirs(OUTSIDE_WRITES, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.writelines(os.path.realpath(p) + "\n" for p in paths)
+
+
+def shell_write_paths(command, cwd):
+    """Files a command line writes: redirection targets, the files tee and Out-File are given, and what curl, wget and
+    Invoke-WebRequest save to (-o, -O, --output, --output-document, -OutFile)."""
+    # shortcut: other ways to save (gh run download -D, aws s3 cp's destination, scp) are not read; their files
+    # count only in an external_files folder
+    paths = []
+    for segment in command_segments(command):
+        try:
+            words = shlex.split(segment, posix=False)
+        except ValueError:
+            words = segment.split()
+        program, target = (words[0].lower() if words else ""), False
+        for word in words[1:]:
+            redirect = re.match(r"(?:\d*|&)>>?(.*)", word)
+            flag, eq, value = word.partition("=")
+            if target:
+                paths.append(word)
+                target = False
+            elif redirect:   # > file, 2>>file, &>file
+                target = not redirect.group(1)
+                paths += [redirect.group(1)] if redirect.group(1) else []
+            elif flag in ("-o", "-O", "--output", "--output-document") or flag.lower() == "-outfile":
+                target = not eq
+                paths += [value] if eq else []
+            elif program in ("tee", "out-file") and not word.startswith("-"):
+                paths.append(word)
+    return [to_path(p, cwd) for p in paths if not re.match(r"""["']?(?:&|/dev/)""", p)]   # 2>&1, > /dev/null
 
 
 def on_output(event, rules):
@@ -427,6 +487,8 @@ def on_output(event, rules):
     # Anything but a shell or a local file search is web, MCP or API content, even from a tool whose input stays local;
     # so is a file a shell or file tool reads when its text came from outside.
     external = tool not in SHELLS + FILE_TOOLS or bool(rules.external.search(command)) or reads_outside_file(event, rules)
+    if external and tool in SHELLS:   # what it saved holds outside text too: `gh pr diff 7 > pr.diff`
+        remember_writes(event.get("session_id"), shell_write_paths(command, event.get("cwd") or os.getcwd()))
     # Read is checked only for outside text, and never rewritten: Edit needs a file's exact bytes from it.
     read = tool == "Read"
     if read:

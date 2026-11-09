@@ -199,7 +199,7 @@ are read in that order, and every list extends the built-in one.
 | `ask_commands` | `{"name", "pattern", "message"?, "block"?, "whole_line"?}` rules for shell commands the user must approve first; `"block": true` denies the command instead, `"whole_line": true` searches the whole command line rather than each command in it; see [Ask before a command](#ask-before-a-command) |
 | `credential_files` | Extra `{"name", "pattern"}` credential files that Read and Grep refuse; the regex is searched, ignoring case, in the file's absolute path with `/` separators, e.g. `"/\\.vault-token$"` |
 | `allowed_credential_files` | Regexes, matched the same way, for paths to read even though they look like a credential file, such as a test fixture: `"/tests/fixtures/[^/]+\\.pem$"` |
-| `external_files` | Regexes, matched the same way, for files whose text came from outside, so a Read, Grep or shell read (`cat`, `head`, `grep` ...) of one is checked for instruction-like text like web output, added to your Downloads folder, `/tmp`, `/var/tmp` and the macOS and Windows temp folders (where Claude Code keeps its scratchpad), Apple Mail's folders, and `.eml`, `.emlx`, `.msg` and `.mbox` files anywhere. Read output is checked, never changed. Add a folder you save tickets, diffs or attachments to: `"^/srv/inbox/"` |
+| `external_files` | Regexes, matched the same way, for files whose text came from outside, so a Read, Grep or shell read (`cat`, `head`, `grep` ...) of one is checked for instruction-like text like web output, added to your Downloads folder, `/tmp`, `/var/tmp` and the macOS and Windows temp folders (where Claude Code keeps its scratchpad), Apple Mail's folders, and `.eml`, `.emlx`, `.msg` and `.mbox` files anywhere. A file an outside command saved earlier in the same session counts too, wherever it is: a redirection (`gh pr diff 7 > pr.diff`), `tee`, `Out-File`, or curl's, wget's and `Invoke-WebRequest`'s `-o`, `-O`, `--output` and `-OutFile`; the session's list is kept in `~/.claude/coding-agent-guard/outside-writes/`. Read output is checked, never changed. Add a folder you save tickets, diffs or attachments to: `"^/srv/inbox/"` |
 | `classifier_url` | Base URL of a scoring server (below); empty turns the model check off |
 | `classifier_threshold` | Score at or above which a model flags the output; default `0.9` |
 | `classifier_timeout` | Seconds to wait for the server before falling back to patterns; default `5`. Keep it at 40 or less: the output hook is stopped after 60 s, and a stopped hook drops its redactions too |
@@ -692,8 +692,9 @@ check the masked transcripts, then delete it. A dry run over 1,424 transcripts
   to Python. Median of 20 Read calls on an Apple silicon Mac with uv
   (2026-11-06): 14 ms answered by the launcher, against 40 ms through Python.
   After a Read, the launcher answers the same way when the file cannot be
-  outside text: no word of a built-in `external_files` folder in its path and
-  no settings file setting `external_files`. A Read of outside text costs what
+  outside text: no word of a built-in `external_files` folder in its path, no
+  settings file setting `external_files`, and no file saved by an outside
+  command in this session. A Read of outside text costs what
   any outside output does, including the judge's seconds when a model finds it
   suspect.
 - **Commands count where they run, not where they are mentioned**: after `;`,

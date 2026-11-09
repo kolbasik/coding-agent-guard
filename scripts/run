@@ -60,11 +60,20 @@ reads_no_credentials() {
 }
 
 # True when what a Read (agy: view_file) showed cannot be outside text, so it needs no check and Python is not
-# started: no settings file sets external_files, and neither the path nor the folder it really sits in (symlinks
-# resolved) holds a word that every built-in external_files entry in guard.py matches. Keep the words in step with
-# external_files there; a test checks one path per entry. Anything unsure goes to Python.
+# started: no settings file sets external_files, no outside command of this session wrote a file, and neither the
+# path nor the folder it really sits in (symlinks resolved) holds a word that every built-in external_files entry in
+# guard.py matches. Keep the words in step with external_files there; a test checks one path per entry. Anything
+# unsure goes to Python.
 reads_nothing_outside() {
   settings_lack external_files || return 1
+  json_string session_id
+  [ -n "$v" ] || json_string conversationId
+  case $v in
+    ''|*[!A-Za-z0-9_-]*) ;;
+    *) for home in "${HOME:-}" "$profile"; do
+         [ -n "$home" ] && [ -f "$home/.claude/coding-agent-guard/outside-writes/$v.txt" ] && return 1
+       done ;;
+  esac
   read_path || return 1
   [ -n "$p" ] || return 0
   case $where in
