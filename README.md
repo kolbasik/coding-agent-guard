@@ -40,7 +40,7 @@ It never checks your own prompts.
   credential files. A symlink to one counts as the file itself. Shell commands
   that read one are refused too: `cat`, `head`, `tail`, `less`, `more`, `bat`,
   `grep`, `rg`, `sed`, `awk`, `cut`, `strings`, `xxd`, `base64`, `cp` (its
-  source, not its destination), `source` or `.`, and PowerShell's
+  source, not its destination), `source` or `.`, `rtk read`, and PowerShell's
   `Get-Content`, `gc` and `type`. `ls`, `stat` or `test -f` on one is not, nor
   is `cp .env.example .env`.
 - **Injection:** "ignore previous instructions" and variants, fake role tags

@@ -655,9 +655,10 @@ def read_paths(data, cwd):
     return [to_path(p, cwd) for p in paths]
 
 
-# Programs that print, copy or load the files they are given; Get-Content, gc and type are PowerShell's.
+# Programs that print, copy or load the files they are given; Get-Content, gc and type are PowerShell's, and read is
+# `rtk read`, which prints a file (the shell's own read takes variable names, which name no file).
 READERS = {"cat", "head", "tail", "less", "more", "bat", "grep", "rg", "sed", "awk", "cut", "strings", "xxd", "base64",
-           "cp", "source", ".", "get-content", "gc", "type"}
+           "cp", "source", ".", "get-content", "gc", "type", "read"}
 
 
 def shell_read_paths(command, cwd):
