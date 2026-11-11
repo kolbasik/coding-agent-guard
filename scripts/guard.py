@@ -93,6 +93,9 @@ DEFAULTS = {
     "classifier_threshold": 0.9,
     "classifier_timeout": 5,
     "classifier_token_env": "CODING_AGENT_GUARD_TOKEN",
+    # Check outside output and outgoing text for instruction-like text (patterns and the scoring server); false skips
+    # both, and secrets, credential files and command rules are checked as before.
+    "injection_checks": True,
     # Findings log (JSON lines; relative paths resolve against the project) and notifications.
     "log_file": "",
     "notify": "none",
@@ -315,6 +318,7 @@ def build_rules(cfg, known):
         allowed_credential_files=re.compile("|".join(cfg["allowed_credential_files"]), re.I)
         if cfg["allowed_credential_files"] else NEVER,
         external_files=re.compile("|".join(cfg["external_files"]), re.I) if cfg["external_files"] else NEVER,
+        injection=bool(cfg["injection_checks"]),
         ask=[SimpleNamespace(command=_CommandLine(a["pattern"], bool(a.get("whole_line"))), block=bool(a.get("block")),
                              message=a.get("message") or f"matches the '{a['name']}' rule")
              for a in cfg["ask_commands"]],
@@ -487,18 +491,19 @@ def on_output(event, rules):
     # Anything but a shell or a local file search is web, MCP or API content, even from a tool whose input stays local;
     # so is a file a shell or file tool reads when its text came from outside.
     external = tool not in SHELLS + FILE_TOOLS or bool(rules.external.search(command)) or reads_outside_file(event, rules)
-    if external and tool in SHELLS:   # what it saved holds outside text too: `gh pr diff 7 > pr.diff`
+    check = external and rules.injection   # outside text, checked for instruction-like text
+    if check and tool in SHELLS:   # what it saved holds outside text too: `gh pr diff 7 > pr.diff`
         remember_writes(event.get("session_id"), shell_write_paths(command, event.get("cwd") or os.getcwd()))
     # Read is checked only for outside text, and never rewritten: Edit needs a file's exact bytes from it.
     read = tool == "Read"
     if read:
-        response = read_content(response) if external else None
+        response = read_content(response) if check else None
         if response is None:
             return None
     kinds, hits = [], []
 
     def fn(s):
-        if external:
+        if check:
             hits.extend(injection.hits(rules.trusted_lines.sub("", s)))
         cleaned, found = leaks.redact(injection.strip_invisible(s), rules.known, rules.patterns)
         kinds.extend(found)
@@ -508,7 +513,7 @@ def on_output(event, rules):
     if read:
         kinds = []   # the model saw the file as it is, so there is no redaction to tell it about
     rules.call = {"direction": "in", "external": external, "log": True}
-    if external:
+    if check:
         # Send the redacted text: the server is local, but a secret still has no reason to travel.
         rules.sample_text = "\n".join(strings(updated))
         rules.call.update(report.fingerprint(rules.sample_text))
@@ -753,7 +758,7 @@ def on_input(event, rules):
         # tool's own description field or a commit's code.
         sent = ([sent_text(command, cwd)] if tool in SHELLS else strings(data)) + files
         joined = "\n".join(sent)
-        hits = _unique(k for t in sent for k in injection.hits(t))
+        hits = _unique(k for t in sent for k in injection.hits(t)) if rules.injection else []
         if hits:
             warnings.append(f"coding-agent-guard: the text being sent contains instruction-like text ({', '.join(hits)}).")
         stops = []

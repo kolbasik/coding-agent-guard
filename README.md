@@ -204,12 +204,13 @@ are read in that order, and every list extends the built-in one.
 | `classifier_threshold` | Score at or above which a model flags the output; default `0.9` |
 | `classifier_timeout` | Seconds to wait for the server before falling back to patterns; default `5`. Keep it at 40 or less: the output hook is stopped after 60 s, and a stopped hook drops its redactions too |
 | `classifier_token_env` | Environment variable holding the server's bearer token; default `CODING_AGENT_GUARD_TOKEN` |
+| `injection_checks` | `true` (default) checks outside output and outgoing text for instruction-like text, with the pattern checks and the scoring server; `false` turns both off, so no text goes to the server. Secrets, personal IDs, credential files and command rules are checked as before |
 | `log_file` | JSON Lines file with one line per checked call (relative paths resolve against the project); empty turns logging off |
 | `samples_file` | JSON Lines file keeping the redacted text of outputs flagged as injections, up to 50,000 characters each; empty (default) keeps none |
 | `notify` | `"desktop"` pops a notification for confirmed findings; `"none"` (default) only shows the line in Claude Code |
 | `transcript_scrub` | `true` (default) masks secrets found in the Claude Code transcript; `false` only finds them and logs the kinds and counts |
 
-The four `classifier_*` keys, `log_file`, `samples_file`, `notify` and `transcript_scrub` replace the default rather than extending it.
+The four `classifier_*` keys, `injection_checks`, `log_file`, `samples_file`, `notify` and `transcript_scrub` replace the default rather than extending it.
 
 **Notifications and the log.** A *confirmed* finding is a blocked secret or
 personal ID, or an injection a model flagged and the Claude judge did not clear.
