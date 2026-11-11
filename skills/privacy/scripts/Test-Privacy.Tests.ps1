@@ -104,6 +104,17 @@ Describe 'Test-Privacy engine' {
         $result.ExitCode | Should Be 0
     }
 
+    It 'HomebrewPowerShellIsCoveredByItsOptOuts' {
+        # Arrange
+        $sweep = Get-Check (New-Home) 'Unknown-tool sweep' (New-FakeTools @{ Inventory = { 'powershell' } })
+
+        # Act
+        $result = Run @($sweep)
+
+        # Assert
+        $result.ExitCode | Should Be 0
+    }
+
     It 'EmptyInventoryIsNotReportedClean' {
         # Arrange
         $sweep = Get-Check (New-Home) 'Unknown-tool sweep'

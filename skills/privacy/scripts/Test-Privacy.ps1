@@ -345,7 +345,7 @@ function Get-PrivacyChecks([Parameter(Mandatory)][string]$HomePath, [Parameter(M
         # Checked above, or covered by an opt-out in opt-outs.zsh.
         'claude-code*', 'codex', 'codex-code-mode-host', '@google/gemini-cli', 'gemini-cli', 'antigravity-cli', 'agy', 'Antigravity IDE', 'Antigravity', 'zed',
         'herdr', 'ghostty', 'obsidian', 'dbeaver*', 'ollama*', 'podman-desktop', 'Podman Desktop', 'terminal-browser', 'sourcegit', 'gh',
-        'python3*', 'rtk', 'Orca', 'Parallels Desktop', 'npm', 'dotnet-sdk', 'awscli', 'sops', 'opentofu', 'terraform', 'twg',
+        'python3*', 'rtk', 'Orca', 'Parallels Desktop', 'npm', 'dotnet-sdk', 'powershell', 'awscli', 'sops', 'opentofu', 'terraform', 'twg',
         # Assessed clean above, or in SKILL.md's "No off switch exists".
         'jq', 'yq', 'yazi', 'uv', 'nvm', 'docker', 'cfn-lint', 'conftest', 'context-mode', 'herdr-app', 'herdr-core', 'hc',
         # Font casks install font files only; Apple's bundled apps fall under macOS's own analytics setting.

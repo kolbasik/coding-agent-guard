@@ -13,7 +13,7 @@ reads, and applies only when its tool is installed.
 
 ## 1. Check and fix
 
-Needs PowerShell 7 (`brew install --cask powershell`). From this skill's folder:
+Needs PowerShell 7 (`brew install powershell`). From this skill's folder:
 
 ```bash
 pwsh -NoProfile -File scripts/Test-Privacy.ps1                 # status, changes nothing
