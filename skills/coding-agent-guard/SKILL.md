@@ -165,7 +165,7 @@ out, or when a model flagged an injection and the Claude judge did not clear it.
 A flag the judge failed to check is not confirmed. Confirmed findings show the
 user a warning line in Claude Code and, with `notify: "desktop"`, a desktop
 notification; a failing judge shows one line an hour with its error instead. `log_file` (JSON Lines; set in
-the project's `.claude/coding-agent-guard/settings.json`) gets one line per call: every tool
+the project's `.coding-agent-guard/settings.json`) gets one line per call: every tool
 output, every outgoing call, and anything with a finding, with its time,
 session, tool, program names, Jira keys, URL host, scores, `claude_asked`,
 `hook_ms` and whether it was confirmed and notified. The log never holds the

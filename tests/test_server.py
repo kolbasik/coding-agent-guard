@@ -826,8 +826,8 @@ class GuardClientTests(unittest.TestCase):
         # Arrange
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
-            os.makedirs(os.path.join(tmp, ".claude", "coding-agent-guard"))
-            with open(os.path.join(tmp, ".claude", "coding-agent-guard", "settings.json"), "w") as f:
+            os.makedirs(os.path.join(tmp, ".coding-agent-guard"))
+            with open(os.path.join(tmp, ".coding-agent-guard", "settings.json"), "w") as f:
                 json.dump({"classifier_url": "http://10.0.0.1:8765", "classifier_threshold": 0.8}, f)
             with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": tmp}):
                 # Act

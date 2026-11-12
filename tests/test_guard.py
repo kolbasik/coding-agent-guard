@@ -935,17 +935,53 @@ class CommandMatchingTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def load_config_in(self, files):
+        """load_config with the home at home/ and the project at project/, holding {path: settings} below them."""
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "home"))
+            os.makedirs(os.path.join(tmp, "project"))
+            for path, settings in files.items():
+                os.makedirs(os.path.dirname(os.path.join(tmp, path)), exist_ok=True)
+                with open(os.path.join(tmp, path), "w") as f:
+                    json.dump(settings, f)
+            home = os.path.join(tmp, "home")
+            with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home,
+                                              "CLAUDE_PROJECT_DIR": os.path.join(tmp, "project")}):
+                return guard.load_config()
+
     def test_project_config_extends_defaults(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
-            os.makedirs(os.path.join(tmp, ".claude", "coding-agent-guard"))
-            with open(os.path.join(tmp, ".claude", "coding-agent-guard", "settings.json"), "w") as f:
-                json.dump({"external_commands": ["twg"]}, f)
-            with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": tmp}):
-                # Act
-                cfg = guard.load_config()
+        files = {"project/.coding-agent-guard/settings.json": {"external_commands": ["twg"]}}
+        # Act
+        cfg = self.load_config_in(files)
         # Assert
         self.assertEqual(("curl" in cfg["external_commands"], "twg" in cfg["external_commands"]), (True, True))
+
+    def test_legacy_project_config_loads_when_new_one_is_absent(self):
+        # Arrange: a project that still keeps its settings under .claude
+        files = {"project/.claude/coding-agent-guard/settings.json": {"external_commands": ["twg"]}}
+        # Act
+        cfg = self.load_config_in(files)
+        # Assert
+        self.assertIn("twg", cfg["external_commands"])
+
+    def test_new_project_config_wins_over_legacy_one(self):
+        # Arrange
+        files = {"project/.coding-agent-guard/settings.json": {"external_commands": ["twg"]},
+                 "project/.claude/coding-agent-guard/settings.json": {"external_commands": ["old-twg"]}}
+        # Act
+        cfg = self.load_config_in(files)
+        # Assert
+        self.assertEqual(("twg" in cfg["external_commands"], "old-twg" in cfg["external_commands"]), (True, False))
+
+    def test_home_config_stays_under_claude(self):
+        # Arrange
+        files = {"home/.claude/coding-agent-guard/settings.json": {"external_commands": ["twg"]},
+                 "home/.coding-agent-guard/settings.json": {"external_commands": ["new-twg"]}}
+        # Act
+        cfg = self.load_config_in(files)
+        # Assert
+        self.assertEqual(("twg" in cfg["external_commands"], "new-twg" in cfg["external_commands"]), (True, False))
 
     def test_token_named_env_var_is_known_secret(self):
         # Arrange
@@ -1037,8 +1073,8 @@ class HookProcessTests(unittest.TestCase):
     def test_project_config_found_from_event_cwd_without_project_env(self):
         # Arrange
         with tempfile.TemporaryDirectory() as tmp:
-            os.makedirs(os.path.join(tmp, ".claude", "coding-agent-guard"))
-            with open(os.path.join(tmp, ".claude", "coding-agent-guard", "settings.json"), "w") as f:
+            os.makedirs(os.path.join(tmp, ".coding-agent-guard"))
+            with open(os.path.join(tmp, ".coding-agent-guard", "settings.json"), "w") as f:
                 json.dump({"log_file": "events.jsonl"}, f)
             event = json.dumps({**bash_output("all good"), "cwd": tmp, "turn_id": "t1"})
             env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
@@ -1163,18 +1199,21 @@ class HookProcessTests(unittest.TestCase):
         # Arrange
         with tempfile.TemporaryDirectory() as tmp:
             run = self.fake_launcher(tmp)
-            homes = {name: os.path.join(tmp, name) for name in ("none", "user", "project")}
-            for name, setting in (("user", {"credential_files": []}), ("project", {"allowed_credential_files": []})):
-                os.makedirs(os.path.join(homes[name], ".claude", "coding-agent-guard"))
-                with open(os.path.join(homes[name], ".claude", "coding-agent-guard", "settings.json"), "w") as f:
+            homes = {name: os.path.join(tmp, name) for name in ("none", "user", "project", "legacy-project")}
+            for name, folder, setting in (("user", ".claude/coding-agent-guard", {"credential_files": []}),
+                                          ("project", ".coding-agent-guard", {"credential_files": []}),
+                                          ("legacy-project", ".claude/coding-agent-guard",
+                                           {"allowed_credential_files": []})):
+                os.makedirs(os.path.join(homes[name], folder))
+                with open(os.path.join(homes[name], folder, "settings.json"), "w") as f:
                     json.dump(setting, f, indent=2)
             os.makedirs(homes["none"])
             event = json.dumps(read_call(os.path.join(tmp, "app.ts"), cwd=tmp))
             # Act
-            started = [bool(self.launch(run, event, homes["none"] if n == "project" else home, project=home))
+            started = [bool(self.launch(run, event, homes["none"] if n.endswith("project") else home, project=home))
                        for n, home in homes.items()]
         # Assert
-        self.assertEqual(started, [False, True, True])
+        self.assertEqual(started, [False, True, True, True])
 
     @unittest.skipUnless(shutil.which("sh") and os.name != "nt" and not REPO_IN_TEMP,
                          "needs sh, and the repo outside a temp folder")
@@ -1197,8 +1236,8 @@ class HookProcessTests(unittest.TestCase):
         # Arrange
         with tempfile.TemporaryDirectory(dir=REPO, prefix="guard-test-") as tmp:
             run = self.fake_launcher(tmp)
-            os.makedirs(os.path.join(tmp, ".claude", "coding-agent-guard"))
-            with open(os.path.join(tmp, ".claude", "coding-agent-guard", "settings.json"), "w") as f:
+            os.makedirs(os.path.join(tmp, ".coding-agent-guard"))
+            with open(os.path.join(tmp, ".coding-agent-guard", "settings.json"), "w") as f:
                 json.dump({"external_files": ["^/srv/inbox/"]}, f, indent=2)
             event = json.dumps(read_call(os.path.join(tmp, "app.ts"), cwd=tmp))
             # Act

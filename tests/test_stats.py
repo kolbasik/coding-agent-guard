@@ -64,10 +64,10 @@ class ProjectLogTests(unittest.TestCase):
     def test_log_is_found_from_a_directory_below_the_project(self):
         # Arrange
         with tempfile.TemporaryDirectory() as tmp:
-            os.makedirs(os.path.join(tmp, ".claude", "coding-agent-guard"))
+            os.makedirs(os.path.join(tmp, ".coding-agent-guard"))
             os.makedirs(os.path.join(tmp, "code", "repo"))
-            with open(os.path.join(tmp, ".claude", "coding-agent-guard", "settings.json"), "w", encoding="utf-8") as f:
-                json.dump({"log_file": ".claude/events.jsonl"}, f)
+            with open(os.path.join(tmp, ".coding-agent-guard", "settings.json"), "w", encoding="utf-8") as f:
+                json.dump({"log_file": ".coding-agent-guard/events.jsonl"}, f)
             env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
             cwd = os.getcwd()
             os.chdir(os.path.join(tmp, "code", "repo"))
@@ -79,7 +79,7 @@ class ProjectLogTests(unittest.TestCase):
                 os.chdir(cwd)
         # Assert
         # realpath: on macOS the temp folder is a /var symlink to /private/var, and the cwd comes back resolved
-        self.assertEqual(os.path.normcase(path), os.path.normcase(os.path.join(os.path.realpath(tmp), ".claude/events.jsonl")))
+        self.assertEqual(os.path.normcase(path), os.path.normcase(os.path.join(os.path.realpath(tmp), ".coding-agent-guard/events.jsonl")))
 
 
 class ReportTests(unittest.TestCase):

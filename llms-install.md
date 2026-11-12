@@ -140,12 +140,12 @@ these before writing a file:
   (`allowed_credential_files`).
 
 Settings live in `~/.claude/coding-agent-guard/settings.json` (all projects) and
-`<project>/.claude/coding-agent-guard/settings.json` (one project), under Codex
+`<project>/.coding-agent-guard/settings.json` (one project), under Codex
 too. Every list in them extends the built-in one. An example:
 
 ```json
 {
-  "log_file": ".claude/coding-agent-guard/events.jsonl",
+  "log_file": ".coding-agent-guard/events.jsonl",
   "notify": "desktop",
   "external_commands": ["jira-cli"],
   "outbound_commands": ["jira-cli"]

@@ -2,7 +2,7 @@
 
   python stats.py [--log PATH] [--days 7] [--by day|week] [--horizon 0.5] [--screen 0.5]
 
-Reads the hook's log_file (by default the one the project's .claude/coding-agent-guard/settings.json names).
+Reads the hook's log_file (by default the one the project's .coding-agent-guard/settings.json names).
 --horizon and --screen are the thresholds the server asks Claude at, for the what-if tables.
 Prints counts, rates, scores and timings only; the log holds no text.
 """
@@ -150,7 +150,7 @@ def project_log():
     import guard
     here = os.getcwd()
     while not os.environ.get("CLAUDE_PROJECT_DIR"):
-        if os.path.isfile(os.path.join(here, guard.CONFIG)):
+        if guard.project_config(here):
             os.environ["CLAUDE_PROJECT_DIR"] = here
         elif os.path.dirname(here) == here:
             break
@@ -161,7 +161,7 @@ def project_log():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--log", help="log file; default: log_file from the project's .claude/coding-agent-guard/settings.json")
+    ap.add_argument("--log", help="log file; default: log_file from the project's .coding-agent-guard/settings.json")
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--by", choices=["day", "week"], default="day")
     ap.add_argument("--horizon", type=float, default=0.5, help="classifier score the server asks Claude at")
@@ -169,7 +169,7 @@ def main():
     args = ap.parse_args()
     path = args.log or project_log()
     if not path or not os.path.exists(path):
-        sys.exit(f"no log at {path!r}; set log_file in .claude/coding-agent-guard/settings.json or pass --log")
+        sys.exit(f"no log at {path!r}; set log_file in .coding-agent-guard/settings.json or pass --log")
     rows = list(load(path, args.days))
     if not rows:
         sys.exit(f"no entries in the last {args.days} days of {path}")

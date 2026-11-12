@@ -181,8 +181,13 @@ workspace folder.
 
 ## Configure
 
-Optional. `~/.claude/coding-agent-guard/settings.json` and `<project>/.claude/coding-agent-guard/settings.json`
+Optional. `~/.claude/coding-agent-guard/settings.json` and `<project>/.coding-agent-guard/settings.json`
 are read in that order, and every list extends the built-in one.
+
+- The project's folder is its own, not inside `.claude`, because Codex and Antigravity read it too.
+- `<project>/.claude/coding-agent-guard/settings.json`, the old place, is still read when the new one is
+  absent, so a project that has not moved it keeps its block and ask rules; when both exist, the new one wins.
+- The user's folder stays `~/.claude/coding-agent-guard/`, beside the guard's own state there.
 
 | Key | Meaning |
 |---|---|

@@ -18,7 +18,7 @@
 
 Reads the hook JSON on stdin and prints a decision on stdout, or nothing when
 there is nothing to say. Never prints a matched value, only its kind.
-Config: ~/.claude/coding-agent-guard/settings.json and <project>/.claude/coding-agent-guard/settings.json, see README.
+Config: ~/.claude/coding-agent-guard/settings.json and <project>/.coding-agent-guard/settings.json, see README.
 """
 import functools
 import hashlib
@@ -120,17 +120,26 @@ def default_config():
     return {key: list(value) if isinstance(value, list) else value for key, value in DEFAULTS.items()}
 
 
-CONFIG = os.path.join(".claude", "coding-agent-guard", "settings.json")
+HOME_CONFIG = os.path.join(".claude", "coding-agent-guard", "settings.json")
+# A project's sits in its own folder, not in .claude, since Codex and Antigravity read it too. The .claude one is
+# read only when that is absent, so a project that has not moved it keeps its block and ask rules.
+PROJECT_CONFIGS = (os.path.join(".coding-agent-guard", "settings.json"), HOME_CONFIG)
+
+
+def project_config(project):
+    """The project's settings file, or None when it has none."""
+    return next((path for path in (os.path.join(project, name) for name in PROJECT_CONFIGS) if os.path.isfile(path)),
+                None)
 
 
 def load_config():
     cfg = default_config()
     project = os.environ.get("CLAUDE_PROJECT_DIR")
-    paths = [os.path.join(os.path.expanduser("~"), CONFIG)]
+    paths = [os.path.join(os.path.expanduser("~"), HOME_CONFIG)]
     if project:
-        paths.append(os.path.join(project, CONFIG))
+        paths.append(project_config(project))
     for path in paths:
-        if not os.path.isfile(path):
+        if not path or not os.path.isfile(path):
             continue
         with open(path, encoding="utf-8") as f:
             for key, value in json.load(f).items():

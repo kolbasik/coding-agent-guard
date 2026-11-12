@@ -82,7 +82,7 @@ reads_nothing_outside() {
   esac
 }
 
-# False when a settings file, the user's or the project's, names $1.
+# False when a settings file, the user's or the project's (new or legacy place, as guard.py reads them), names $1.
 settings_lack() {
   project=${CLAUDE_PROJECT_DIR:-}
   if [ -z "$project" ]; then   # as guard.py finds it: agy's workspace, else the event's cwd
@@ -93,9 +93,11 @@ settings_lack() {
   fi
   profile=${USERPROFILE:-}   # Python's home on Windows
   while :; do case $profile in *\\*) profile=${profile%%\\*}/${profile#*\\} ;; *) break ;; esac; done
-  for home in "${HOME:-}" "$profile" "$project"; do
-    settings=$home/.claude/coding-agent-guard/settings.json
-    [ -n "$home" ] && [ -f "$settings" ] || continue
+  for settings in "${HOME:+$HOME/.claude/coding-agent-guard/settings.json}" \
+                  "${profile:+$profile/.claude/coding-agent-guard/settings.json}" \
+                  "${project:+$project/.coding-agent-guard/settings.json}" \
+                  "${project:+$project/.claude/coding-agent-guard/settings.json}"; do
+    [ -n "$settings" ] && [ -f "$settings" ] || continue
     while IFS= read -r line || [ -n "$line" ]; do
       case $line in *"$1"*) return 1 ;; esac
     done < "$settings"
