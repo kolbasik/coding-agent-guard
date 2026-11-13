@@ -300,6 +300,18 @@ Describe 'Test-Privacy engine' {
         Test-Path (Join-Path $homeDir '.config/zed') | Should Be $false
     }
 
+    It 'ClaudeCodeUpdateCheckIsOff' {
+        # Arrange
+        $homeDir = New-Home
+        Write-HomeFile $homeDir '.claude/settings.json' '{"env":{"DISABLE_TELEMETRY":"1","DISABLE_ERROR_REPORTING":"1","CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY":"1"}}' | Out-Null
+
+        # Act
+        $result = Run @(Get-Check $homeDir 'Claude Code')
+
+        # Assert
+        $result.Lines[0] | Should Match '^VIOLATION  Claude Code: env\.DISABLE_AUTOUPDATER is missing'
+    }
+
     It 'UnreadableFileIsReportedAndNotRewritten' {
         # Arrange
         $homeDir = New-Home

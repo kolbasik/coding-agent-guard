@@ -243,7 +243,8 @@ function Get-PrivacyChecks([Parameter(Mandatory)][string]$HomePath, [Parameter(M
     }
 
     New-JsonCheck 'Claude Code' (Join-Path $HomePath '.claude/settings.json') ([ordered]@{
-            'env/DISABLE_TELEMETRY' = '1'; 'env/DISABLE_ERROR_REPORTING' = '1'; 'env/CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY' = '1' })
+            'env/DISABLE_TELEMETRY' = '1'; 'env/DISABLE_ERROR_REPORTING' = '1'; 'env/CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY' = '1'
+            'env/DISABLE_AUTOUPDATER' = '1' })
     New-TomlCheck 'Codex config.toml' (Join-Path $HomePath '.codex/config.toml') ([ordered]@{
             check_for_update_on_startup = 'false'; 'analytics.enabled' = 'false'; 'feedback.enabled' = 'false' })
     New-JsonCheck 'Codex app-server daemon' (Join-Path $HomePath '.codex/app-server-daemon/settings.json') ([ordered]@{ 'updater/autoUpdateEnabled' = $false })

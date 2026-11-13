@@ -119,6 +119,8 @@ security tooling, so they are never touched, only kept out of the sweep.
 
 - Claude Code `DISABLE_TELEMETRY` also stops feature flags: no advisor tool,
   artifact comments, `/skill-doctor` or skills synced from claude.ai.
+- Claude Code `DISABLE_AUTOUPDATER` also stops the "Update available! Run:
+  brew upgrade" notice of a Homebrew install: updates are by hand from then on.
 - Codex reads `check_for_update_on_startup` only as a root key above the first
   `[table]`; written below one, it silently belongs to that table.
 
