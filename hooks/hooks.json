@@ -17,7 +17,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|PowerShell|WebFetch|WebSearch|Grep|mcp__.*",
+        "matcher": "Bash|PowerShell|WebFetch|WebSearch|Grep|REPL|mcp__.*",
         "hooks": [
           { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run\" in", "timeout": 60 }
         ]

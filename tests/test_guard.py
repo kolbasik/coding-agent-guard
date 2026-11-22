@@ -198,6 +198,85 @@ class OnOutputTests(unittest.TestCase):
         self.assertIn("instruction-like", context(result))
 
 
+def repl_event(code="(await $`cat notes.txt`.text())", **response):
+    """A Code Mode PostToolUse event as Claude Code sends it: the REPL tool's code and what it returned."""
+    return {"session_id": "abc123", "transcript_path": "/tmp/abc123.jsonl", "cwd": os.getcwd(), "permission_mode": "auto",
+            "hook_event_name": "PostToolUse", "tool_name": "REPL", "tool_input": {"code": code},
+            "tool_response": {"code": code, "stdout": "", "stderr": "", "toolsUsed": ["Bash"], **response},
+            "tool_use_id": "toolu_01ABC123", "duration_ms": 12}
+
+
+def post_tool_use(event):
+    """The replies Claude Code gets for event from this plugin: each PostToolUse hook whose hooks/hooks.json matcher
+    takes the tool, run as a process in its mode, away from the user's settings; None for a hook that printed nothing."""
+    with open(os.path.join(REPO, "hooks", "hooks.json"), encoding="utf-8") as f:
+        groups = json.load(f)["hooks"]["PostToolUse"]
+    modes = [h["command"].split()[-1] for g in groups if re.fullmatch(g["matcher"], event["tool_name"]) for h in g["hooks"]]
+    with tempfile.TemporaryDirectory() as home:
+        env = {**os.environ, "HOME": home, "USERPROFILE": home, "CLAUDE_PROJECT_DIR": home}
+        runs = [subprocess.run([sys.executable, os.path.join(SCRIPTS, "guard.py"), mode], input=json.dumps(event),
+                               capture_output=True, text=True, env=env) for mode in modes]
+    return [json.loads(run.stdout) if run.stdout else None for run in runs]
+
+
+def tool_outputs(replies):
+    return [(reply or {}).get("hookSpecificOutput", {}).get("updatedToolOutput") for reply in replies]
+
+
+class CodeModeTests(unittest.TestCase):
+    def test_token_in_repl_result_is_redacted(self):
+        # Arrange
+        event = repl_event(result=f"deploy token: {GITHUB}")
+        # Act
+        replies = post_tool_use(event)
+        # Assert
+        self.assertEqual(tool_outputs(replies),
+                         [{**event["tool_response"], "result": "deploy token: [REDACTED:github-token]"}])
+
+    def test_token_in_repl_stdout_is_redacted(self):
+        # Arrange
+        event = repl_event(code="console.log(await $`gh auth token`.text())", result=None, stdout=f"{GITHUB}\n")
+        # Act
+        replies = post_tool_use(event)
+        # Assert
+        self.assertEqual(tool_outputs(replies), [{**event["tool_response"], "stdout": "[REDACTED:github-token]\n"}])
+
+    def test_token_nested_in_repl_object_result_is_redacted(self):
+        # Arrange
+        event = repl_event(result={"config": {"auth": {"token": GITHUB}}, "keys": [AWS], "files": 3, "ok": True})
+        # Act
+        replies = post_tool_use(event)
+        # Assert
+        self.assertEqual(tool_outputs(replies), [{**event["tool_response"], "result": {
+            "config": {"auth": {"token": "[REDACTED:github-token]"}}, "keys": ["[REDACTED:aws-key-id]"], "files": 3,
+            "ok": True}}])
+
+    def test_token_in_thrown_repl_error_is_redacted(self):
+        # Arrange
+        event = repl_event(error=f"Error: token {GITHUB} was rejected")
+        # Act
+        replies = post_tool_use(event)
+        # Assert
+        self.assertEqual(tool_outputs(replies),
+                         [{**event["tool_response"], "error": "Error: token [REDACTED:github-token] was rejected"}])
+
+    def test_clean_repl_output_is_left_unchanged(self):
+        # Arrange
+        event = repl_event(result={"edited": "src/retry.ts", "tests": "12 passed"}, toolsUsed=["Bash", "Edit"])
+        # Act
+        replies = post_tool_use(event)
+        # Assert
+        self.assertEqual(replies, [None])
+
+    def test_repl_code_is_not_checked_as_output(self):
+        # Arrange
+        event = repl_event(code='(await $`rg -l "ignore previous instructions" docs`.text())', result="docs/security.md\n")
+        # Act
+        replies = post_tool_use(event)
+        # Assert
+        self.assertEqual(replies, [None])
+
+
 class OnInputTests(unittest.TestCase):
     def test_outbound_command_with_token_is_denied(self):
         # Arrange

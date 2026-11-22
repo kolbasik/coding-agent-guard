@@ -17,8 +17,10 @@ recover the value: no re-running with other flags, encodings, `cut` or `od`.
 If a task needs the secret, a script reads it from its store; it never passes
 through the conversation.
 
-Redaction covers shell, Grep, web and MCP output, not the Read tool. When a redacted
-line has to be edited, Read the file for its exact bytes.
+Redaction covers shell, Grep, web and MCP output and what Code Mode code returns,
+not the Read tool. When a redacted line has to be edited, Read the file for its
+exact bytes; in Code Mode, let the code take the text from the file itself
+rather than from its redacted output.
 
 ## "coding-agent-guard: blocked, ... would read a credential file ..."
 

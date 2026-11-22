@@ -38,6 +38,9 @@ import transcript
 
 SHELLS = ("Bash", "PowerShell")
 FILE_TOOLS = ("Read", "Grep")   # read local files into the conversation; only credential files are refused
+# What Code Mode's code returned, the fields Claude Code's docs say to redact; the rest (its code, the calls it made
+# or had refused) is Claude's own input, left as it is so the copy keeps REPL's shape.
+REPL_OUTPUT = ("result", "stdout", "stderr", "error")
 HOME = os.path.expanduser("~").replace("\\", "/")
 
 # Every list here is extended, never replaced, by the config files.
@@ -518,13 +521,16 @@ def on_output(event, rules):
         kinds.extend(found)
         return cleaned
 
-    updated = walk(response, fn)   # for Read, only what the scoring server and the log get
+    output = ({k: response[k] for k in REPL_OUTPUT if k in response} if tool == "REPL" and isinstance(response, dict)
+              else response)
+    redacted = walk(output, fn)   # for Read, only what the scoring server and the log get
+    updated = {**response, **redacted} if output is not response else redacted
     if read:
         kinds = []   # the model saw the file as it is, so there is no redaction to tell it about
     rules.call = {"direction": "in", "external": external, "log": True}
     if check:
         # Send the redacted text: the server is local, but a secret still has no reason to travel.
-        rules.sample_text = "\n".join(strings(updated))
+        rules.sample_text = "\n".join(strings(redacted))
         rules.call.update(report.fingerprint(rules.sample_text))
         hits.extend(model_hits(rules.trusted_lines.sub("", rules.sample_text), rules.classifier))
     notes = []
@@ -545,7 +551,7 @@ def on_output(event, rules):
                              "exposed": _unique(kinds) if codex else [],
                              "scores": rules.classifier.scores, "classifier_error": rules.classifier.error,
                              # the redacted text: a hash of a short secret could be guessed back
-                             **report.fingerprint("\n".join(strings(updated)))})
+                             **report.fingerprint("\n".join(strings(redacted)))})
     if agy:
         return {"withhold": notes[0]} if kinds else {"note": "\n".join(notes)} if notes else None
     out = {}

@@ -8,7 +8,7 @@ redacting it (see [Antigravity](#antigravity)).
 
 | When | Checks | On a hit |
 |---|---|---|
-| After a shell, Grep, web or MCP tool runs | Secrets and personal IDs | Redacted before Claude sees the output |
+| After a shell, Grep, web or MCP tool runs, or code in Claude Code's [Code Mode](#code-mode) | Secrets and personal IDs | Redacted before Claude sees the output |
 | | Invisible Unicode (zero-width, bidi, tag characters) | Removed |
 | | Instruction-like text in output from outside | A note tells Claude it is data |
 | After a Read, Grep or shell read of a file from outside: Downloads, temp folders, mail (see `external_files`) | Instruction-like text | A note tells Claude it is data; what Read showed is left as it was |
@@ -178,6 +178,31 @@ The `PreInvocation` hook starts Python before every model call: about 0.24 s
 each on a Windows ARM64 VM with the venv (2026-10-11). agy sets no
 `CLAUDE_PROJECT_DIR`; the project settings are found from the session's
 workspace folder.
+
+## Code Mode
+
+In Claude Code's [Code Mode](https://code.claude.com/docs/en/code-mode.md),
+Claude writes JavaScript that makes its tool calls, and Claude Code runs it
+through a tool named `REPL`:
+
+- Each call the code makes reaches the guard's `PreToolUse` hook under its own
+  name (`Bash`, `Read`, `mcp__<server>__<tool>`) with the input it really runs
+  with, so secrets going out, credential files and ask rules are checked as
+  without Code Mode. `REPL` itself gets no `PreToolUse` check: its code does not
+  show what those calls compute at run time, and each call is checked anyway.
+- What the code returns is what Claude reads, and the `PostToolUse` hook on
+  `REPL` checks it: secrets are redacted in `result` (a string, or strings
+  anywhere inside an object or list), `stdout`, `stderr` and `error`, and the
+  code and the list of tools it used are left as they are, so the copy keeps
+  `REPL`'s shape. It counts as output from outside, since a fetch in the code
+  cannot be told from a local command, so instruction-like text gets a note.
+- On an internal error the guard lets the output through unchanged, as for
+  every other tool.
+- A command the code runs in a subfolder can reach `PreToolUse` as
+  `cd '<dir>' && <command>`, so a rule such as the `cd-compound` example under
+  [Ask before a command](#ask-before-a-command) blocks it.
+- Built from Claude Code's Code Mode and hooks documentation (2026-11-22) and
+  not yet tried in a live Code Mode session.
 
 ## Configure
 
