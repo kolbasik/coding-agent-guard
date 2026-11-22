@@ -348,7 +348,7 @@ function Get-PrivacyChecks([Parameter(Mandatory)][string]$HomePath, [Parameter(M
         'herdr', 'ghostty', 'obsidian', 'dbeaver*', 'ollama*', 'podman-desktop', 'Podman Desktop', 'terminal-browser', 'sourcegit', 'gh',
         'python3*', 'rtk', 'Orca', 'Parallels Desktop', 'npm', 'dotnet-sdk', 'powershell', 'awscli', 'sops', 'opentofu', 'terraform', 'twg',
         # Assessed clean above, or in SKILL.md's "No off switch exists".
-        'jq', 'yq', 'yazi', 'uv', 'nvm', 'docker', 'cfn-lint', 'conftest', 'context-mode', 'herdr-app', 'herdr-core', 'hc',
+        'jq', 'yq', 'yazi', 'uv', 'nvm', 'docker', 'cfn-lint', 'conftest', 'herdr-app', 'herdr-core', 'hc',
         # Font casks install font files only; Apple's bundled apps fall under macOS's own analytics setting.
         'font-*', 'Safari', 'GarageBand', 'Keynote', 'Numbers', 'Pages', 'iMovie', 'Utilities')
     New-Check 'Unknown-tool sweep' -Kind sweep -Hint "add it to $KnownFile" -Data @{ Tools = $Tools; HomePath = $HomePath; Known = $known; KnownFile = $KnownFile } -Test {
