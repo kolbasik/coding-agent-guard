@@ -1,10 +1,20 @@
 {
   "name": "coding-agent-guard",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "description": "Redacts secrets and personal IDs from tool output, flags prompt injection in content from outside, and blocks secrets from leaving the machine.",
-  "author": { "name": "kolbasik" },
+  "author": {
+    "name": "kolbasik"
+  },
   "homepage": "https://github.com/kolbasik/coding-agent-guard",
   "repository": "https://github.com/kolbasik/coding-agent-guard",
   "license": "MIT",
-  "keywords": ["security", "prompt-injection", "secrets", "hooks", "claude-code", "codex", "antigravity"]
+  "keywords": [
+    "security",
+    "prompt-injection",
+    "secrets",
+    "hooks",
+    "claude-code",
+    "codex",
+    "antigravity"
+  ]
 }
