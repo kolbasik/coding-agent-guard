@@ -1219,8 +1219,8 @@ class HookProcessTests(unittest.TestCase):
         os.chmod(fake, 0o755)
         return os.path.join(tmp, "scripts", "run")
 
-    def launch(self, run, event, home, project=None, mode="read"):
-        env = {**os.environ, "HOME": home, "USERPROFILE": home, "CLAUDE_PROJECT_DIR": project or home}
+    def launch(self, run, event, home, project=None, mode="read", profile=None):
+        env = {**os.environ, "HOME": home, "USERPROFILE": profile or home, "CLAUDE_PROJECT_DIR": project or home}
         return subprocess.run(["sh", run, mode], input=event, capture_output=True, text=True, env=env).stdout
 
     @unittest.skipUnless(shutil.which("sh") and os.name != "nt", "needs sh and symlinks")
@@ -1338,6 +1338,59 @@ class HookProcessTests(unittest.TestCase):
             started = [bool(self.launch(run, event, tmp, mode="read-in")) for event in events]
         # Assert
         self.assertEqual(started, [True, False])
+
+    def write_settings(self, folder, settings):
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "settings.json"), "w") as f:
+            f.write(settings if isinstance(settings, str) else json.dumps(settings, indent=2))
+
+    @unittest.skipUnless(shutil.which("sh"), "needs sh")
+    def test_launcher_answers_reads_itself_only_when_user_settings_turn_injection_checks_off(self):
+        # Arrange: external_files in every settings file, so only injection_checks can keep Python from starting
+        user = {"off": {"external_files": [], "injection_checks": False},
+                "on": {"external_files": [], "injection_checks": True},
+                "unset": {"external_files": []},
+                "unsure": '{\n  "external_files": [],\n  "injection_checks" : false\n}',
+                "off-under-home-only": {"external_files": [], "injection_checks": False}}
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.fake_launcher(tmp)
+            for name, settings in user.items():
+                self.write_settings(os.path.join(tmp, name, ".claude", "coding-agent-guard"), settings)
+            project, profile = os.path.join(tmp, "project"), os.path.join(tmp, "profile")
+            for folder in (project, profile):
+                os.makedirs(folder)
+            event = json.dumps(read_call(os.path.join(tmp, "app.ts"), cwd=tmp))
+            # Act
+            started = {name: bool(self.launch(run, event, os.path.join(tmp, name), project=project, mode="read-in",
+                                              profile=profile if name.endswith("home-only") else None))
+                       for name in user}
+        # Assert
+        self.assertEqual(started, {"off": False, "on": True, "unset": True, "unsure": True,
+                                   "off-under-home-only": True})
+
+    @unittest.skipUnless(shutil.which("sh"), "needs sh")
+    def test_launcher_takes_injection_checks_from_project_settings_over_user_settings(self):
+        # Arrange: (user's injection_checks, project's new file, project's legacy file); None leaves the key or file out
+        cases = {"user-off-project-on": (False, {"injection_checks": True}, None),
+                 "user-on-project-off": (True, {"injection_checks": False}, None),
+                 "legacy-project-off": (True, None, {"injection_checks": False}),
+                 "legacy-off-beside-new": (True, {}, {"injection_checks": False})}
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.fake_launcher(tmp)
+            for name, (user, new, legacy) in cases.items():
+                self.write_settings(os.path.join(tmp, name, "home", ".claude", "coding-agent-guard"),
+                                    {"external_files": [], "injection_checks": user})
+                for folder, settings in ((".coding-agent-guard", new), (".claude/coding-agent-guard", legacy)):
+                    if settings is not None:
+                        self.write_settings(os.path.join(tmp, name, "project", folder), settings)
+            event = json.dumps(read_call(os.path.join(tmp, "app.ts"), cwd=tmp))
+            # Act
+            started = {name: bool(self.launch(run, event, os.path.join(tmp, name, "home"),
+                                              project=os.path.join(tmp, name, "project"), mode="read-in"))
+                       for name in cases}
+        # Assert
+        self.assertEqual(started, {"user-off-project-on": True, "user-on-project-off": False,
+                                   "legacy-project-off": False, "legacy-off-beside-new": True})
 
     @unittest.skipUnless(shutil.which("git"), "needs git")
     def test_every_shell_script_checks_out_with_lf(self):

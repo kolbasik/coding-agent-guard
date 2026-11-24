@@ -725,8 +725,11 @@ check the masked transcripts, then delete it. A dry run over 1,424 transcripts
   After a Read, the launcher answers the same way when the file cannot be
   outside text: no word of a built-in `external_files` folder in its path, no
   settings file setting `external_files`, and no file saved by an outside
-  command in this session. A Read of outside text costs what
-  any outside output does, including the judge's seconds when a model finds it
+  command in this session. It answers every Read when the settings in force,
+  the project's over the user's, set `injection_checks` to `false`, since
+  nothing in what Read shows is then checked: median of 30 such Reads
+  (2026-11-24) 12 ms, against 117 ms through Python. A Read of outside text
+  costs what any outside output does, including the judge's seconds when a model finds it
   suspect.
 - **Commands count where they run, not where they are mentioned**: after `;`,
   `&&`, `|` or inside `$( )`, behind `rtk`, `sudo`, `env`, `timeout` or `VAR=x`,

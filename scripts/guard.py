@@ -1129,7 +1129,8 @@ def main():
         sweep(sys.argv[2:])
         return
     # read and agy-read are out for file reads, which scripts/run answers itself when they cannot name a credential
-    # file; read-in and agy-read-in are in for what a Read showed, answered there when it cannot be outside text
+    # file; read-in and agy-read-in are in for what a Read showed, answered there when it cannot be outside text or
+    # injection checks are off
     handler = {"in": on_output, "out": on_input, "read": on_input, "read-in": on_output,
                "agy-in": on_output, "agy-out": on_input, "agy-read": on_input, "agy-read-in": on_output}.get(mode)
     if handler is None and mode not in ("agy-warn", "scrub"):

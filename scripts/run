@@ -82,17 +82,58 @@ reads_nothing_outside() {
   esac
 }
 
-# False when a settings file, the user's or the project's (new or legacy place, as guard.py reads them), names $1.
-settings_lack() {
+# True when the settings guard.py reads turn injection checks off, so what a Read (agy: view_file) showed needs no
+# check and Python is not started: the project's file (the legacy place only when the new one is absent) sets
+# "injection_checks": false, or it does not name the key and the user's file sets it false, under $HOME and under
+# %USERPROFILE% when that is set, since Python may read either. Anything unsure goes to Python.
+injection_off() {
+  settings_places || return 1
+  s=none
+  if [ -n "$project" ]; then
+    settings=$project/.coding-agent-guard/settings.json
+    [ -f "$settings" ] || settings=$project/.claude/coding-agent-guard/settings.json
+    injection_in "$settings"
+  fi
+  [ "$s" = none ] || { [ "$s" = off ]; return; }
+  [ -n "${HOME:-}$profile" ] || return 1
+  for home in "${HOME:-}" "$profile"; do
+    [ -n "$home" ] || continue
+    injection_in "$home/.claude/coding-agent-guard/settings.json"
+    [ "$s" = off ] || return 1
+  done
+}
+
+# What settings file $1 sets injection_checks to, as $s: off for false, none when the file or the key is absent, and ?
+# for any other value, spacing or a second mention on one line.
+injection_in() {
+  s=none
+  [ -f "$1" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in
+      *'"injection_checks"'*'"injection_checks"'*) s='?'; return ;;
+      *'"injection_checks": false'*|*'"injection_checks":false'*) s=off ;;
+      *'"injection_checks"'*) s='?'; return ;;
+    esac
+  done < "$1"
+}
+
+# $project and $profile as guard.py finds them: the project from CLAUDE_PROJECT_DIR, else agy's workspace, else the
+# event's cwd; the profile is Python's home on Windows. False when unsure.
+settings_places() {
   project=${CLAUDE_PROJECT_DIR:-}
-  if [ -z "$project" ]; then   # as guard.py finds it: agy's workspace, else the event's cwd
+  if [ -z "$project" ]; then
     json_string workspacePaths
     [ -n "$v" ] || json_string cwd
     [ "$v" = '?' ] && return 1
     project=$v
   fi
-  profile=${USERPROFILE:-}   # Python's home on Windows
+  profile=${USERPROFILE:-}
   while :; do case $profile in *\\*) profile=${profile%%\\*}/${profile#*\\} ;; *) break ;; esac; done
+}
+
+# False when a settings file, the user's or the project's (new or legacy place, as guard.py reads them), names $1.
+settings_lack() {
+  settings_places || return 1
   for settings in "${HOME:+$HOME/.claude/coding-agent-guard/settings.json}" \
                   "${profile:+$profile/.claude/coding-agent-guard/settings.json}" \
                   "${project:+$project/.coding-agent-guard/settings.json}" \
@@ -130,6 +171,7 @@ case "$1" in
     exit ;;
   read-in|agy-read-in)
     input=$(cat)
+    injection_off && exit 0
     reads_nothing_outside && exit 0
     printf '%s' "$input" | start "$@"
     exit ;;
